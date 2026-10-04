@@ -1,0 +1,92 @@
+<?xml version="1.0"?>
+<robot name="agos" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ===================== Chassis dimensions =====================
+       Per explicit request: 660.4 x 279.4 x 406.4 mm (L x W x H).
+       NOTE: this supersedes the nominal ~0.20 x 0.15 x 0.10 m footprint in
+       DRIFT.md. At this size AGOS cannot physically enter the 0.15 m ID
+       PVC pipe described in DRIFT.md's environment spec (Known Issue 1
+       already flagged the nominal size as borderline; this size is ~3x
+       larger in every axis). Flagging per DRIFT.md's own conflict rule;
+       proceeding with the dimensions given in this request. -->
+  <xacro:property name="chassis_length" value="0.6604"/>
+  <xacro:property name="chassis_width"  value="0.2794"/>
+  <xacro:property name="chassis_height" value="0.4064"/>
+  <xacro:property name="chassis_mass"   value="42.0"/>
+
+  <!-- Track / road-wheel geometry (single driven roller per side, see
+       agos_tracks.xacro) -->
+  <xacro:property name="track_radius"     value="0.1016"/>
+  <xacro:property name="track_width"      value="0.08"/>
+  <xacro:property name="track_mass"       value="3.5"/>
+  <xacro:property name="track_separation" value="${chassis_width - track_width}"/>
+
+  <!-- Surface friction: PVC pipe inner wall contact coefficient from
+       DRIFT.md, applied identically to the track contact surface. -->
+  <xacro:property name="track_mu" value="0.4"/>
+
+  <xacro:include filename="$(find agos_sim)/urdf/agos_materials.xacro"/>
+  <xacro:include filename="$(find agos_sim)/urdf/agos_tracks.xacro"/>
+  <xacro:include filename="$(find agos_sim)/urdf/agos_sensors.xacro"/>
+
+  <!-- ===================== base_footprint -> base_link -> chassis_link ===================== -->
+  <link name="base_footprint"/>
+
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${track_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="base_link"/>
+
+  <joint name="base_link_to_chassis" type="fixed">
+    <parent link="base_link"/>
+    <child link="chassis_link"/>
+    <origin xyz="0 0 ${chassis_height/2 - track_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="chassis_link">
+    <visual>
+      <!-- Decimated reference mesh from AGOS_V1.stl (chassis sub-assembly,
+           isolated by spatial split since the source STL has no named
+           parts; 20k triangles after quadric decimation). STL is in mm,
+           hence scale 0.001 per DRIFT.md's mesh rules. The source CAD's
+           native length axis is Y, so a 90 degree yaw aligns it with the
+           URDF's REP-103 forward (X) axis. -->
+      <origin xyz="0 0 0" rpy="0 0 1.5708"/>
+      <geometry>
+        <mesh filename="$(find agos_sim)/meshes/agos_chassis.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="agos_chassis_grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="${chassis_mass}"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia
+        ixx="${(chassis_mass/12.0)*(chassis_width*chassis_width + chassis_height*chassis_height)}" ixy="0.0" ixz="0.0"
+        iyy="${(chassis_mass/12.0)*(chassis_length*chassis_length + chassis_height*chassis_height)}" iyz="0.0"
+        izz="${(chassis_mass/12.0)*(chassis_length*chassis_length + chassis_width*chassis_width)}"/>
+    </inertial>
+  </link>
+
+  <gazebo reference="chassis_link">
+    <material>Gazebo/DarkGrey</material>
+  </gazebo>
+
+  <!-- ===================== Tracks (left / right, differential drive) ===================== -->
+  <xacro:agos_track side="left"  y_sign="1"/>
+  <xacro:agos_track side="right" y_sign="-1"/>
+
+  <!-- ===================== Sensors ===================== -->
+  <xacro:agos_camera/>
+  <xacro:agos_lidar/>
+  <xacro:agos_imu/>
+
+</robot>

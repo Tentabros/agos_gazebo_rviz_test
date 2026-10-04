@@ -1,0 +1,6 @@
+Invoking command in '/home/reuel/agos_ws/build/agos_sim': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake /home/reuel/agos_ws/src/agos_sim -DAMENT_CMAKE_SYMLINK_INSTALL=1 -DCMAKE_INSTALL_PREFIX=/home/reuel/agos_ws/install/agos_sim
+Invoked command in '/home/reuel/agos_ws/build/agos_sim' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake /home/reuel/agos_ws/src/agos_sim -DAMENT_CMAKE_SYMLINK_INSTALL=1 -DCMAKE_INSTALL_PREFIX=/home/reuel/agos_ws/install/agos_sim
+Invoking command in '/home/reuel/agos_ws/build/agos_sim': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake --build /home/reuel/agos_ws/build/agos_sim -- -j8 -l8
+Invoked command in '/home/reuel/agos_ws/build/agos_sim' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake --build /home/reuel/agos_ws/build/agos_sim -- -j8 -l8
+Invoking command in '/home/reuel/agos_ws/build/agos_sim': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake --install /home/reuel/agos_ws/build/agos_sim
+Invoked command in '/home/reuel/agos_ws/build/agos_sim' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake --install /home/reuel/agos_ws/build/agos_sim

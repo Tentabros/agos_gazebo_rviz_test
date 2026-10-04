@@ -1,0 +1,67 @@
+[0.046s] Invoking command in '/home/reuel/agos_ws/build/agos_sim': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake /home/reuel/agos_ws/src/agos_sim -DCMAKE_INSTALL_PREFIX=/home/reuel/agos_ws/install/agos_sim
+[0.138s] CMake Deprecation Warning at CMakeLists.txt:1 (cmake_minimum_required):
+[0.138s]   Compatibility with CMake < 3.10 will be removed from a future version of
+[0.138s]   CMake.
+[0.138s] 
+[0.138s]   Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+[0.138s]   to tell CMake that the project requires at least <min> but has been updated
+[0.138s]   to work with policies introduced by <max> or earlier.
+[0.138s] 
+[0.138s] 
+[0.168s] -- Found ament_cmake: 2.8.8 (/opt/ros/lyrical/share/ament_cmake/cmake)
+[0.877s] -- Override CMake install command with custom implementation using symlinks instead of copying resources
+[0.919s] -- Found urdf: 2.13.2 (/opt/ros/lyrical/share/urdf/cmake)
+[0.952s] -- Found xacro: 2.1.1 (/opt/ros/lyrical/share/xacro/cmake)
+[0.955s] -- Found robot_state_publisher: 3.5.6 (/opt/ros/lyrical/share/robot_state_publisher/cmake)
+[1.060s] -- Found rosidl_generator_c: 5.2.1 (/opt/ros/lyrical/share/rosidl_generator_c/cmake)
+[1.077s] -- Found rosidl_generator_cpp: 5.2.1 (/opt/ros/lyrical/share/rosidl_generator_cpp/cmake)
+[1.104s] -- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+[1.152s] -- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+[1.350s] -- Found rmw_implementation_cmake: 7.10.2 (/opt/ros/lyrical/share/rmw_implementation_cmake/cmake)
+[1.357s] -- Found rmw_fastrtps_cpp: 9.4.10 (/opt/ros/lyrical/share/rmw_fastrtps_cpp/cmake)
+[1.453s] -- Using RMW implementation 'rmw_fastrtps_cpp' as default
+[2.171s] -- Found ros_gz_sim: 3.0.10 (/opt/ros/lyrical/share/ros_gz_sim/cmake)
+[2.180s] -- Found ros_gz_bridge: 3.0.10 (/opt/ros/lyrical/share/ros_gz_bridge/cmake)
+[3.599s] -- Found ament_lint_auto: 0.20.6 (/opt/ros/lyrical/share/ament_lint_auto/cmake)
+[3.965s] -- Added test 'flake8' to check Python code syntax and style conventions
+[3.966s] -- Configured 'flake8' exclude dirs and/or files: 
+[3.966s] -- Added test 'lint_cmake' to check CMake code style
+[3.967s] -- Added test 'pep257' to check Python code against some of the docstring style conventions in PEP 257
+[3.970s] -- Added test 'xmllint' to check XML markup files
+[3.978s] -- Configuring done (3.8s)
+[4.028s] -- Generating done (0.0s)
+[4.237s] -- Build files have been written to: /home/reuel/agos_ws/build/agos_sim
+[4.271s] Invoked command in '/home/reuel/agos_ws/build/agos_sim' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake /home/reuel/agos_ws/src/agos_sim -DCMAKE_INSTALL_PREFIX=/home/reuel/agos_ws/install/agos_sim
+[4.274s] Invoking command in '/home/reuel/agos_ws/build/agos_sim': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake --build /home/reuel/agos_ws/build/agos_sim -- -j8 -l8
+[4.404s] Invoked command in '/home/reuel/agos_ws/build/agos_sim' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake --build /home/reuel/agos_ws/build/agos_sim -- -j8 -l8
+[4.447s] Invoking command in '/home/reuel/agos_ws/build/agos_sim': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake --install /home/reuel/agos_ws/build/agos_sim
+[4.471s] -- Install configuration: ""
+[4.473s] -- Execute custom install script
+[4.474s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//launch/__pycache__/simulation.launch.cpython-314.pyc
+[4.475s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//launch/agos_sim.launch.py
+[4.475s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//launch/simulation.launch.py
+[4.476s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//config/agos_sim_params.yaml
+[4.477s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//config/bridge.yaml
+[4.478s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//urdf/agos.urdf.xacro
+[4.478s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//urdf/agos_materials.xacro
+[4.478s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//urdf/agos_sensors.xacro
+[4.478s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//urdf/agos_tracks.xacro
+[4.479s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//worlds/pipe_world.sdf
+[4.480s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim//rviz/agos_sim.rviz
+[4.480s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/ament_index/resource_index/package_run_dependencies/agos_sim
+[4.480s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/ament_index/resource_index/parent_prefix_path/agos_sim
+[4.480s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/environment/ament_prefix_path.sh
+[4.481s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/environment/ament_prefix_path.dsv
+[4.481s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/environment/path.sh
+[4.482s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/environment/path.dsv
+[4.482s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/local_setup.bash
+[4.482s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/local_setup.fish
+[4.483s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/local_setup.sh
+[4.483s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/local_setup.zsh
+[4.483s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/local_setup.dsv
+[4.485s] -- Symlinking: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/package.dsv
+[4.512s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/ament_index/resource_index/packages/agos_sim
+[4.513s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/cmake/agos_simConfig.cmake
+[4.514s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/cmake/agos_simConfig-version.cmake
+[4.514s] -- Up-to-date symlink: /home/reuel/agos_ws/install/agos_sim/share/agos_sim/package.xml
+[4.519s] Invoked command in '/home/reuel/agos_ws/build/agos_sim' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/lyrical /usr/bin/cmake --install /home/reuel/agos_ws/build/agos_sim

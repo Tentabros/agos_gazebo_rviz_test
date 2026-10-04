@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Shared visual materials for AGOS. Gazebo ignores URDF <material> colors
+       unless mirrored with a <gazebo reference="..."><material> block on each
+       link (done at the point each link is defined). -->
+
+  <material name="agos_chassis_grey">
+    <color rgba="0.35 0.35 0.38 1.0"/>
+  </material>
+
+  <material name="agos_track_black">
+    <color rgba="0.08 0.08 0.08 1.0"/>
+  </material>
+
+  <material name="agos_sensor_dark">
+    <color rgba="0.10 0.10 0.12 1.0"/>
+  </material>
+
+</robot>

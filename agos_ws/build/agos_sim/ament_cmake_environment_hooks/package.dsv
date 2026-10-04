@@ -1,0 +1,5 @@
+source;share/agos_sim/local_setup.bash
+source;share/agos_sim/local_setup.dsv
+source;share/agos_sim/local_setup.fish
+source;share/agos_sim/local_setup.sh
+source;share/agos_sim/local_setup.zsh

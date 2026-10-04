@@ -1,0 +1,5 @@
+# Configuration parameters for agos_sim
+agos_sim:
+  ros__parameters:
+    # Add your parameters here
+    example_param: "default_value"

@@ -1,0 +1,80 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Simplified track model per DRIFT.md: a single driven road-wheel/roller
+       per side, continuous joint about the lateral (y) axis. Full
+       link-per-segment track dynamics are explicitly out of scope. -->
+  <xacro:macro name="agos_track" params="side y_sign">
+    <link name="${side}_track_link">
+      <visual>
+        <!-- Decimated reference mesh from AGOS_V1.stl (track sub-assembly,
+             isolated by spatial split; 15k triangles after quadric
+             decimation). Same mesh reused for both sides (no left/right
+             mirroring applied) since this is a visual reference only -
+             collision stays the simplified driven-roller cylinder per
+             DRIFT.md's mesh rules. STL is in mm (scale 0.001); 90 degree
+             yaw aligns the CAD's native length axis (Y) with REP-103
+             forward (X). -->
+        <origin xyz="0 0 0" rpy="0 0 1.5708"/>
+        <geometry>
+          <mesh filename="$(find agos_sim)/meshes/track.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="agos_track_black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${track_radius}" length="${track_width}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="${track_mass}"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia
+          ixx="${(track_mass/12.0)*(3*track_radius*track_radius + track_width*track_width)}" ixy="0.0" ixz="0.0"
+          iyy="${(track_mass/2.0)*track_radius*track_radius}" iyz="0.0"
+          izz="${(track_mass/12.0)*(3*track_radius*track_radius + track_width*track_width)}"/>
+      </inertial>
+    </link>
+
+    <joint name="${side}_track_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${side}_track_link"/>
+      <origin xyz="0 ${y_sign * track_separation/2} 0" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <dynamics damping="0.1" friction="0.05"/>
+    </joint>
+
+    <!-- Friction matches the PVC pipe inner wall contact (DRIFT.md: mu=mu2=0.4
+         applied identically on both surfaces) -->
+    <gazebo reference="${side}_track_link">
+      <material>Gazebo/Black</material>
+      <mu1>${track_mu}</mu1>
+      <mu2>${track_mu}</mu2>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- Differential drive plugin: subscribes to /cmd_vel. The plugin's own
+       odom->base_footprint TF is redirected off the canonical /tf topic so
+       the EKF (robot_localization, per DRIFT.md) remains the single
+       publisher of that transform; raw odometry is still published on
+       /odom for drift comparison against /ground_truth/odom. -->
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>left_track_joint</left_joint>
+      <right_joint>right_track_joint</right_joint>
+      <wheel_separation>${track_separation}</wheel_separation>
+      <wheel_radius>${track_radius}</wheel_radius>
+      <topic>cmd_vel</topic>
+      <odom_topic>odom</odom_topic>
+      <tf_topic>/model/agos/tf_odom_raw</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
+      <odom_publish_frequency>50</odom_publish_frequency>
+    </plugin>
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+      <topic>joint_states</topic>
+    </plugin>
+  </gazebo>
+
+</robot>

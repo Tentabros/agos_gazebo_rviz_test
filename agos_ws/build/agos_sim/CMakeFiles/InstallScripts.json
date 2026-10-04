@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/reuel/agos_ws/build/agos_sim/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

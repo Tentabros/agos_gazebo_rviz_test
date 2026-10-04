@@ -1,0 +1,29 @@
+running develop
+running egg_info
+creating agos_sim.egg-info
+writing agos_sim.egg-info/PKG-INFO
+writing dependency_links to agos_sim.egg-info/dependency_links.txt
+writing requirements to agos_sim.egg-info/requires.txt
+writing top-level names to agos_sim.egg-info/top_level.txt
+writing manifest file 'agos_sim.egg-info/SOURCES.txt'
+reading manifest file 'agos_sim.egg-info/SOURCES.txt'
+writing manifest file 'agos_sim.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/reuel/practice_gazebo/install/agos_sim/lib/python3.14/site-packages/agos-sim.egg-link (link to .)
+
+Installed /home/reuel/practice_gazebo/build/agos_sim
+running symlink_data
+creating /home/reuel/practice_gazebo/install/agos_sim/share/ament_index/resource_index/packages
+symbolically linking /home/reuel/practice_gazebo/build/agos_sim/resource/agos_sim -> /home/reuel/practice_gazebo/install/agos_sim/share/ament_index/resource_index/packages
+symbolically linking /home/reuel/practice_gazebo/build/agos_sim/package.xml -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim
+creating /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+symbolically linking /home/reuel/practice_gazebo/build/agos_sim/urdf/agos.urdf.xacro -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+symbolically linking /home/reuel/practice_gazebo/build/agos_sim/urdf/agos_tracks.xacro -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+symbolically linking /home/reuel/practice_gazebo/build/agos_sim/urdf/agos_materials.xacro -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+symbolically linking /home/reuel/practice_gazebo/build/agos_sim/urdf/agos_sensors.xacro -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+creating /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/launch
+symbolically linking /home/reuel/practice_gazebo/build/agos_sim/launch/sim.launch.py -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/launch
+creating /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/config
+symbolically linking /home/reuel/practice_gazebo/build/agos_sim/config/bridge.yaml -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/config
+creating /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/worlds
+symbolically linking /home/reuel/practice_gazebo/build/agos_sim/worlds/test_world.sdf -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/worlds

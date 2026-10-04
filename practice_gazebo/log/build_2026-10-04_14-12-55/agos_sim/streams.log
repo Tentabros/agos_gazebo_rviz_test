@@ -1,0 +1,31 @@
+[3.889s] Invoking command in '/home/reuel/practice_gazebo/build/agos_sim': PYTHONPATH=/home/reuel/practice_gazebo/build/agos_sim/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/reuel/practice_gazebo/install/agos_sim/lib/python3.14/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/reuel/practice_gazebo/build/agos_sim/build --no-deps symlink_data
+[5.021s] running develop
+[5.606s] running egg_info
+[5.669s] creating agos_sim.egg-info
+[5.669s] writing agos_sim.egg-info/PKG-INFO
+[5.671s] writing dependency_links to agos_sim.egg-info/dependency_links.txt
+[5.671s] writing requirements to agos_sim.egg-info/requires.txt
+[5.671s] writing top-level names to agos_sim.egg-info/top_level.txt
+[5.672s] writing manifest file 'agos_sim.egg-info/SOURCES.txt'
+[5.797s] reading manifest file 'agos_sim.egg-info/SOURCES.txt'
+[5.798s] writing manifest file 'agos_sim.egg-info/SOURCES.txt'
+[5.862s] running build_ext
+[5.863s] Creating /home/reuel/practice_gazebo/install/agos_sim/lib/python3.14/site-packages/agos-sim.egg-link (link to .)
+[5.865s] 
+[5.865s] Installed /home/reuel/practice_gazebo/build/agos_sim
+[5.865s] running symlink_data
+[5.865s] creating /home/reuel/practice_gazebo/install/agos_sim/share/ament_index/resource_index/packages
+[5.866s] symbolically linking /home/reuel/practice_gazebo/build/agos_sim/resource/agos_sim -> /home/reuel/practice_gazebo/install/agos_sim/share/ament_index/resource_index/packages
+[5.867s] symbolically linking /home/reuel/practice_gazebo/build/agos_sim/package.xml -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim
+[5.867s] creating /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+[5.868s] symbolically linking /home/reuel/practice_gazebo/build/agos_sim/urdf/agos.urdf.xacro -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+[5.868s] symbolically linking /home/reuel/practice_gazebo/build/agos_sim/urdf/agos_tracks.xacro -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+[5.869s] symbolically linking /home/reuel/practice_gazebo/build/agos_sim/urdf/agos_materials.xacro -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+[5.869s] symbolically linking /home/reuel/practice_gazebo/build/agos_sim/urdf/agos_sensors.xacro -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/urdf
+[5.869s] creating /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/launch
+[5.870s] symbolically linking /home/reuel/practice_gazebo/build/agos_sim/launch/sim.launch.py -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/launch
+[5.870s] creating /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/config
+[5.870s] symbolically linking /home/reuel/practice_gazebo/build/agos_sim/config/bridge.yaml -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/config
+[5.871s] creating /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/worlds
+[5.871s] symbolically linking /home/reuel/practice_gazebo/build/agos_sim/worlds/test_world.sdf -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/worlds
+[6.027s] Invoked command in '/home/reuel/practice_gazebo/build/agos_sim' returned '0': PYTHONPATH=/home/reuel/practice_gazebo/build/agos_sim/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/reuel/practice_gazebo/install/agos_sim/lib/python3.14/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/reuel/practice_gazebo/build/agos_sim/build --no-deps symlink_data

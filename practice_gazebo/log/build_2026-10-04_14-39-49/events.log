@@ -1,0 +1,72 @@
+[0.000000] (-) TimerEvent: {}
+[0.001043] (agos_sim) JobQueued: {'identifier': 'agos_sim', 'dependencies': OrderedDict()}
+[0.001646] (agos_sim) JobStarted: {'identifier': 'agos_sim'}
+[0.099558] (-) TimerEvent: {}
+[0.200312] (-) TimerEvent: {}
+[0.300762] (-) TimerEvent: {}
+[0.401445] (-) TimerEvent: {}
+[0.502368] (-) TimerEvent: {}
+[0.602881] (-) TimerEvent: {}
+[0.703454] (-) TimerEvent: {}
+[0.804101] (-) TimerEvent: {}
+[0.904888] (-) TimerEvent: {}
+[1.005455] (-) TimerEvent: {}
+[1.105960] (-) TimerEvent: {}
+[1.206455] (-) TimerEvent: {}
+[1.306897] (-) TimerEvent: {}
+[1.407330] (-) TimerEvent: {}
+[1.507779] (-) TimerEvent: {}
+[1.608227] (-) TimerEvent: {}
+[1.708662] (-) TimerEvent: {}
+[1.809164] (-) TimerEvent: {}
+[1.909692] (-) TimerEvent: {}
+[2.010254] (-) TimerEvent: {}
+[2.111074] (-) TimerEvent: {}
+[2.211647] (-) TimerEvent: {}
+[2.313078] (-) TimerEvent: {}
+[2.413814] (-) TimerEvent: {}
+[2.514744] (-) TimerEvent: {}
+[2.615293] (-) TimerEvent: {}
+[2.715881] (-) TimerEvent: {}
+[2.816292] (-) TimerEvent: {}
+[2.916790] (-) TimerEvent: {}
+[3.017354] (-) TimerEvent: {}
+[3.117794] (-) TimerEvent: {}
+[3.218429] (-) TimerEvent: {}
+[3.284381] (agos_sim) Command: {'cmd': ['/usr/bin/python3', '-W', 'ignore:setup.py install is deprecated', '-W', 'ignore:easy_install command is deprecated', 'setup.py', 'develop', '--editable', '--build-directory', '/home/reuel/practice_gazebo/build/agos_sim/build', '--no-deps', 'symlink_data'], 'cwd': '/home/reuel/practice_gazebo/build/agos_sim', 'env': OrderedDict({'GZ_SIM_SYSTEM_PLUGIN_PATH': '/opt/ros/lyrical/lib', 'PROFILEHOME': '', 'LINOROBOT2_BASE': '2wd', 'LESSOPEN': '| /usr/bin/lesspipe %s', 'KDE_FULL_SESSION': 'true', 'GZ_SIM_RESOURCE_PATH': '/opt/ros/lyrical/share:/opt/ros/lyrical/share/', 'LANGUAGE': '', 'USER': 'reuel', 'GZ_CONFIG_PATH': '/opt/ros/lyrical/opt/gz_sim_vendor/share/gz:/opt/ros/lyrical/opt/gz_gui_vendor/share/gz:/opt/ros/lyrical/opt/gz_transport_vendor/share/gz:/opt/ros/lyrical/opt/sdformat_vendor/share/gz:/opt/ros/lyrical/opt/gz_rendering_vendor/share/gz:/opt/ros/lyrical/opt/gz_plugin_vendor/share/gz:/opt/ros/lyrical/opt/gz_fuel_tools_vendor/share/gz:/opt/ros/lyrical/opt/gz_msgs_vendor/share/gz:/opt/ros/lyrical/opt/gz_common_vendor/share/gz', 'XDG_SEAT': 'seat0', 'XDG_SESSION_TYPE': 'wayland', 'KONSOLE_VERSION': '251203', 'QT_WAYLAND_RECONNECT': '1', 'SHLVL': '1', 'LD_LIBRARY_PATH': '/opt/ros/lyrical/opt/gz_sim_vendor/lib:/opt/ros/lyrical/opt/gz_sensors_vendor/lib:/opt/ros/lyrical/opt/gz_gui_vendor/lib:/opt/ros/lyrical/opt/gz_transport_vendor/lib:/opt/ros/lyrical/opt/zenoh_cpp_vendor/lib:/opt/ros/lyrical/opt/gz_physics_vendor/lib:/opt/ros/lyrical/opt/sdformat_vendor/lib:/opt/ros/lyrical/opt/gz_rendering_vendor/lib:/opt/ros/lyrical/opt/gz_plugin_vendor/lib:/opt/ros/lyrical/opt/gz_fuel_tools_vendor/lib:/opt/ros/lyrical/opt/gz_msgs_vendor/lib:/opt/ros/lyrical/opt/gz_common_vendor/lib:/opt/ros/lyrical/opt/gz_math_vendor/lib:/opt/ros/lyrical/opt/gz_utils_vendor/lib:/opt/ros/lyrical/opt/rviz_ogre_vendor/lib:/opt/ros/lyrical/lib/x86_64-linux-gnu:/opt/ros/lyrical/opt/gz_tools_vendor/lib:/opt/ros/lyrical/opt/gz_ogre_next_vendor/lib:/opt/ros/lyrical/opt/gz_dartsim_vendor/lib:/opt/ros/lyrical/opt/gz_cmake_vendor/lib:/opt/ros/lyrical/lib', 'HOME': '/home/reuel', 'KDE_APPLICATIONS_AS_SCOPE': '1', 'OLDPWD': '/home/reuel', 'DESKTOP_SESSION': 'plasma', 'ROS_PYTHON_VERSION': '3', 'SHELL_SESSION_ID': '6d6d7763eed0434c8a40dd929e77dd24', 'GTK_RC_FILES': '/etc/gtk/gtkrc:/home/reuel/.gtkrc:/home/reuel/.config/gtkrc', 'GTK_MODULES': 'gail:atk-bridge', 'KDE_SESSION_VERSION': '6', 'KONSOLE_DBUS_SESSION': '/Sessions/1', 'MANAGERPID': '3780', 'SYSTEMD_EXEC_PID': '4304', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1000/bus', 'COLORTERM': 'truecolor', 'KONSOLE_DBUS_ACTIVATION_COOKIE': 'C0GBfcy98HnQjL4N4r9lIrZILs1eJloYffW7C8lqmbU=', 'KONSOLE_DBUS_WINDOW': '/Windows/1', 'WAYLAND_DISPLAY': 'wayland-0', 'XKB_DEFAULT_LAYOUT': 'us', 'ROS_DISTRO': 'lyrical', 'LOGNAME': 'reuel', 'WINDOWID': '106018260130176', 'MANAGERPIDFDID': '4533', 'JOURNAL_STREAM': '10:32080', '_': '/usr/bin/colcon', 'ROS_VERSION': '2', 'MEMORY_PRESSURE_WATCH': '/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/session.slice/plasma-kwin_wayland.service/memory.pressure', 'XDG_SESSION_CLASS': 'user', 'COLORFGBG': '15;0', 'USERNAME': 'reuel', 'TERM': 'xterm-256color', 'XDG_SESSION_ID': '2', 'KGLOBALACCELD_PLATFORM': 'org.kde.kwin', 'GTK2_RC_FILES': '/etc/gtk-2.0/gtkrc:/home/reuel/.gtkrc-2.0:/home/reuel/.config/gtkrc-2.0', 'PATH': '/opt/ros/lyrical/opt/gz_msgs_vendor/bin:/opt/ros/lyrical/opt/gz_tools_vendor/bin:/opt/ros/lyrical/opt/gz_ogre_next_vendor/bin:/opt/ros/lyrical/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin', 'SESSION_MANAGER': 'local/TENTA-LAPTOP:@/tmp/.ICE-unix/4500,unix/TENTA-LAPTOP:/tmp/.ICE-unix/4500', 'INVOCATION_ID': '8f845557e2b94131935c454401b96504', 'XDG_MENU_PREFIX': 'plasma-', 'XKB_DEFAULT_MODEL': 'pc105', 'XDG_RUNTIME_DIR': '/run/user/1000', 'ICEAUTHORITY': '/run/user/1000/iceauth_pWJrtG', 'DISPLAY': ':0', 'LANG': 'en_US.UTF-8', 'XDG_CURRENT_DESKTOP': 'KDE', 'XDG_SESSION_DESKTOP': 'plasma', 'XAUTHORITY': '/run/user/1000/xauth_zyUkXl', 'LS_COLORS': 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=00:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.avif=01;35:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:*~=00;90:*#=00;90:*.bak=00;90:*.old=00;90:*.orig=00;90:*.part=00;90:*.rej=00;90:*.swp=00;90:*.tmp=00;90:*.dpkg-dist=00;90:*.dpkg-old=00;90:*.ucf-dist=00;90:*.ucf-new=00;90:*.ucf-old=00;90:*.rpmnew=00;90:*.rpmorig=00;90:*.rpmsave=00;90:', 'SSH_AUTH_SOCK': '/run/user/1000/gcr/ssh', 'AMENT_PREFIX_PATH': '/opt/ros/lyrical', 'SHELL': '/bin/bash', 'QT_ACCESSIBILITY': '1', 'GDMSESSION': 'plasma', '_JAVA_AWT_WM_NONREPARENTING': '1', 'LESSCLOSE': '/usr/bin/lesspipe %s %s', 'KONSOLE_DBUS_SERVICE': ':1.437', 'GPG_AGENT_INFO': '/run/user/1000/gnupg/S.gpg-agent:0:1', 'ROS_AUTOMATIC_DISCOVERY_RANGE': 'SUBNET', 'XDG_VTNR': '2', 'PWD': '/home/reuel/practice_gazebo/build/agos_sim', 'LC_ALL': 'en_US.UTF-8', 'XDG_CONFIG_DIRS': '/home/reuel/.config/kdedefaults:/etc/xdg', 'XDG_DATA_DIRS': '/usr/local/share/:/usr/share/:/var/lib/snapd/desktop', 'XDG_SESSION_EXTRA_DEVICE_ACCESS': 'render:accel', 'PYTHONPATH': '/home/reuel/practice_gazebo/build/agos_sim/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/reuel/practice_gazebo/install/agos_sim/lib/python3.14/site-packages:/opt/ros/lyrical/opt/gz_sim_vendor/lib/python:/opt/ros/lyrical/opt/gz_transport_vendor/lib/python:/opt/ros/lyrical/opt/sdformat_vendor/lib/python:/opt/ros/lyrical/opt/gz_msgs_vendor/lib/python:/opt/ros/lyrical/opt/gz_math_vendor/lib/python:/opt/ros/lyrical/lib/python3.14/site-packages', 'KDE_SESSION_UID': '1000', 'COLCON': '1', 'MEMORY_PRESSURE_WRITE': 'c29tZSAyMDAwMDAgMjAwMDAwMAA=', 'CMAKE_PREFIX_PATH': '/opt/ros/lyrical/opt/gz_sim_vendor:/opt/ros/lyrical/opt/gz_sensors_vendor:/opt/ros/lyrical/opt/gz_gui_vendor:/opt/ros/lyrical/opt/gz_transport_vendor:/opt/ros/lyrical/opt/gz_physics_vendor:/opt/ros/lyrical/opt/sdformat_vendor:/opt/ros/lyrical/opt/gz_rendering_vendor:/opt/ros/lyrical/opt/gz_plugin_vendor:/opt/ros/lyrical/opt/gz_fuel_tools_vendor:/opt/ros/lyrical/opt/gz_msgs_vendor:/opt/ros/lyrical/opt/gz_common_vendor:/opt/ros/lyrical/opt/gz_math_vendor:/opt/ros/lyrical/opt/gz_utils_vendor:/opt/ros/lyrical/opt/gz_tools_vendor:/opt/ros/lyrical/opt/gz_ogre_next_vendor:/opt/ros/lyrical/opt/gz_dartsim_vendor:/opt/ros/lyrical/opt/gz_cmake_vendor'}), 'shell': False}
+[3.318590] (-) TimerEvent: {}
+[3.419316] (-) TimerEvent: {}
+[3.519872] (-) TimerEvent: {}
+[3.620433] (-) TimerEvent: {}
+[3.721853] (-) TimerEvent: {}
+[3.822420] (-) TimerEvent: {}
+[3.922913] (-) TimerEvent: {}
+[4.023512] (-) TimerEvent: {}
+[4.122323] (agos_sim) StdoutLine: {'line': b'running develop\n'}
+[4.123628] (-) TimerEvent: {}
+[4.224118] (-) TimerEvent: {}
+[4.324642] (-) TimerEvent: {}
+[4.425208] (-) TimerEvent: {}
+[4.525846] (-) TimerEvent: {}
+[4.626466] (-) TimerEvent: {}
+[4.638017] (agos_sim) StdoutLine: {'line': b'running egg_info\n'}
+[4.701842] (agos_sim) StdoutLine: {'line': b'writing agos_sim.egg-info/PKG-INFO\n'}
+[4.703339] (agos_sim) StdoutLine: {'line': b'writing dependency_links to agos_sim.egg-info/dependency_links.txt\n'}
+[4.704084] (agos_sim) StdoutLine: {'line': b'writing requirements to agos_sim.egg-info/requires.txt\n'}
+[4.704389] (agos_sim) StdoutLine: {'line': b'writing top-level names to agos_sim.egg-info/top_level.txt\n'}
+[4.726600] (-) TimerEvent: {}
+[4.825997] (agos_sim) StdoutLine: {'line': b"reading manifest file 'agos_sim.egg-info/SOURCES.txt'\n"}
+[4.826688] (-) TimerEvent: {}
+[4.828261] (agos_sim) StdoutLine: {'line': b"writing manifest file 'agos_sim.egg-info/SOURCES.txt'\n"}
+[4.892360] (agos_sim) StdoutLine: {'line': b'running build_ext\n'}
+[4.892711] (agos_sim) StdoutLine: {'line': b'Creating /home/reuel/practice_gazebo/install/agos_sim/lib/python3.14/site-packages/agos-sim.egg-link (link to .)\n'}
+[4.894125] (agos_sim) StdoutLine: {'line': b'\n'}
+[4.894294] (agos_sim) StdoutLine: {'line': b'Installed /home/reuel/practice_gazebo/build/agos_sim\n'}
+[4.894458] (agos_sim) StdoutLine: {'line': b'running symlink_data\n'}
+[4.895970] (agos_sim) StdoutLine: {'line': b'creating /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/rviz\n'}
+[4.896237] (agos_sim) StdoutLine: {'line': b'symbolically linking /home/reuel/practice_gazebo/build/agos_sim/rviz/agos.rviz -> /home/reuel/practice_gazebo/install/agos_sim/share/agos_sim/rviz\n'}
+[4.926881] (-) TimerEvent: {}
+[5.027443] (-) TimerEvent: {}
+[5.040542] (agos_sim) CommandEnded: {'returncode': 0}
+[5.075595] (agos_sim) JobEnded: {'identifier': 'agos_sim', 'rc': 0}
+[5.077465] (-) EventReactorShutdown: {}

@@ -1,0 +1,112 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- One driven road wheel. Collision = full track_radius cylinder (this is
+       what touches the ground). Visual is slightly smaller so it hides inside
+       the static belt. -->
+  <xacro:macro name="agos_wheel" params="side y_sign pos x">
+    <link name="${side}_wheel_${pos}">
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${track_radius - 0.012}" length="${track_width - 0.01}"/>
+        </geometry>
+        <material name="agos_track_black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${track_radius}" length="${track_width - 0.01}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="${wheel_mass}"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia
+          ixx="${(wheel_mass/12.0)*(3*track_radius*track_radius + track_width*track_width)}" ixy="0.0" ixz="0.0"
+          iyy="${(wheel_mass/2.0)*track_radius*track_radius}" iyz="0.0"
+          izz="${(wheel_mass/12.0)*(3*track_radius*track_radius + track_width*track_width)}"/>
+      </inertial>
+    </link>
+
+    <joint name="${side}_wheel_${pos}_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${side}_wheel_${pos}"/>
+      <origin xyz="${x} ${y_sign * track_separation/2} 0" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <dynamics damping="0.1" friction="0.05"/>
+    </joint>
+
+    <gazebo reference="${side}_wheel_${pos}">
+      <mu1>${track_mu}</mu1>
+      <mu2>${track_mu}</mu2>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- One side: static belt (visual only, never rotates) + 3 driven wheels -->
+  <xacro:macro name="agos_track" params="side y_sign">
+
+    <link name="${side}_track_frame">
+      <!-- center straight section -->
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${2*wheel_x_offset} ${track_width} ${2*track_radius}"/>
+        </geometry>
+        <material name="agos_track_black"/>
+      </visual>
+      <!-- front rounded end -->
+      <visual>
+        <origin xyz="${wheel_x_offset} 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${track_radius}" length="${track_width}"/>
+        </geometry>
+        <material name="agos_track_black"/>
+      </visual>
+      <!-- rear rounded end -->
+      <visual>
+        <origin xyz="${-wheel_x_offset} 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${track_radius}" length="${track_width}"/>
+        </geometry>
+        <material name="agos_track_black"/>
+      </visual>
+    </link>
+
+    <joint name="${side}_track_frame_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="${side}_track_frame"/>
+      <origin xyz="0 ${y_sign * track_separation/2} 0" rpy="0 0 0"/>
+    </joint>
+
+    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="front" x="${wheel_x_offset}"/>
+    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="mid"   x="0"/>
+    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="rear"  x="${-wheel_x_offset}"/>
+  </xacro:macro>
+
+  <!-- Differential drive over all 6 wheel joints. The plugin's own
+       odom->base_footprint TF stays off /tf so the EKF remains the single
+       publisher; raw odometry is on /odom. -->
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>left_wheel_front_joint</left_joint>
+      <left_joint>left_wheel_mid_joint</left_joint>
+      <left_joint>left_wheel_rear_joint</left_joint>
+      <right_joint>right_wheel_front_joint</right_joint>
+      <right_joint>right_wheel_mid_joint</right_joint>
+      <right_joint>right_wheel_rear_joint</right_joint>
+      <wheel_separation>${track_separation}</wheel_separation>
+      <wheel_radius>${track_radius}</wheel_radius>
+      <topic>cmd_vel</topic>
+      <odom_topic>odom</odom_topic>
+      <tf_topic>/model/agos/tf_odom_raw</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
+      <odom_publish_frequency>50</odom_publish_frequency>
+    </plugin>
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+      <topic>joint_states</topic>
+    </plugin>
+  </gazebo>
+
+</robot>

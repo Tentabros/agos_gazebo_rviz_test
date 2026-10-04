@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="agos_world">
+
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.002</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <!-- Needed for gpu_lidar and rgbd_camera. If it crashes on your GPU, change ogre2 to ogre -->
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <!-- Without this, /imu/data stays silent -->
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <light type="directional" name="sun">
+      <cast_shadows>false</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>40 40</size></plane></geometry>
+          <surface><friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>40 40</size></plane></geometry>
+          <material><ambient>0.6 0.6 0.6 1</ambient><diffuse>0.6 0.6 0.6 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Room walls (8 m x 8 m) -->
+    <model name="walls">
+      <static>true</static>
+      <link name="link">
+        <collision name="n"><pose>0 4 0.5 0 0 0</pose><geometry><box><size>8 0.2 1</size></box></geometry></collision>
+        <visual name="n"><pose>0 4 0.5 0 0 0</pose><geometry><box><size>8 0.2 1</size></box></geometry></visual>
+        <collision name="s"><pose>0 -4 0.5 0 0 0</pose><geometry><box><size>8 0.2 1</size></box></geometry></collision>
+        <visual name="s"><pose>0 -4 0.5 0 0 0</pose><geometry><box><size>8 0.2 1</size></box></geometry></visual>
+        <collision name="e"><pose>4 0 0.5 0 0 0</pose><geometry><box><size>0.2 8 1</size></box></geometry></collision>
+        <visual name="e"><pose>4 0 0.5 0 0 0</pose><geometry><box><size>0.2 8 1</size></box></geometry></visual>
+        <collision name="w"><pose>-4 0 0.5 0 0 0</pose><geometry><box><size>0.2 8 1</size></box></geometry></collision>
+        <visual name="w"><pose>-4 0 0.5 0 0 0</pose><geometry><box><size>0.2 8 1</size></box></geometry></visual>
+        <!-- obstacles for scan matching -->
+        <collision name="b1"><pose>1.5 1.5 0.5 0 0 0</pose><geometry><box><size>0.8 0.8 1</size></box></geometry></collision>
+        <visual name="b1"><pose>1.5 1.5 0.5 0 0 0</pose><geometry><box><size>0.8 0.8 1</size></box></geometry></visual>
+        <collision name="b2"><pose>-1.5 -1 0.5 0 0 0.5</pose><geometry><box><size>1.2 0.4 1</size></box></geometry></collision>
+        <visual name="b2"><pose>-1.5 -1 0.5 0 0 0.5</pose><geometry><box><size>1.2 0.4 1</size></box></geometry></visual>
+      </link>
+    </model>
+
+  
+    <!-- Added by Drift: a fixed camera looking at the origin, so the scene can be
+         checked visually after it launches. Inert — static, no collisions, no
+         dynamics; it does not affect the simulation. Safe to delete if you do not
+         want it, though Drift will not be able to show you the running scene. -->
+    <model name="drift_scene_view">
+      <static>true</static>
+      <pose>3 0 2 0 0.34 3.14159</pose>
+      <link name="link">
+        <sensor type="camera" name="drift_scene_view_camera">
+          <topic>/drift/scene_view</topic>
+          <always_on>1</always_on>
+          <update_rate>30</update_rate>
+          <camera>
+            <horizontal_fov>1.0472</horizontal_fov>
+            <image>
+              <width>800</width>
+              <height>600</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.05</near>
+              <far>100</far>
+            </clip>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+</world>
+</sdf>

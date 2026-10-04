@@ -1,0 +1,15 @@
+[2.897s] Invoking command in '/home/reuel/practice_gazebo/build/agos_sim': PYTHONPATH=/home/reuel/practice_gazebo/build/agos_sim/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/reuel/practice_gazebo/install/agos_sim/lib/python3.14/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/reuel/practice_gazebo/build/agos_sim/build --no-deps symlink_data
+[3.664s] running develop
+[4.165s] running egg_info
+[4.220s] writing agos_sim.egg-info/PKG-INFO
+[4.221s] writing dependency_links to agos_sim.egg-info/dependency_links.txt
+[4.221s] writing requirements to agos_sim.egg-info/requires.txt
+[4.222s] writing top-level names to agos_sim.egg-info/top_level.txt
+[4.335s] reading manifest file 'agos_sim.egg-info/SOURCES.txt'
+[4.338s] writing manifest file 'agos_sim.egg-info/SOURCES.txt'
+[4.397s] running build_ext
+[4.397s] Creating /home/reuel/practice_gazebo/install/agos_sim/lib/python3.14/site-packages/agos-sim.egg-link (link to .)
+[4.399s] 
+[4.399s] Installed /home/reuel/practice_gazebo/build/agos_sim
+[4.399s] running symlink_data
+[4.533s] Invoked command in '/home/reuel/practice_gazebo/build/agos_sim' returned '0': PYTHONPATH=/home/reuel/practice_gazebo/build/agos_sim/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/reuel/practice_gazebo/install/agos_sim/lib/python3.14/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/reuel/practice_gazebo/build/agos_sim/build --no-deps symlink_data

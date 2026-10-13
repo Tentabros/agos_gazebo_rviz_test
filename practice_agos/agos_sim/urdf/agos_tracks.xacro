@@ -1,98 +1,72 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- Added 'mu' parameter to control friction per-wheel -->
-  <xacro:macro name="agos_wheel" params="side y_sign pos x mu">
+  <!-- Each track is modelled as driven wheel cylinders where the real track
+       touches things (cheap and stable). They have no visual: the track you
+       see is the CAD mesh on chassis_link.
+         4 road wheels  : the CAD rollers, bottoms on the ground (z = 0)
+         2 idler wheels : the raised front/rear ends of the track, so the
+                          robot can climb onto lips, debris and pipe walls -->
+  <xacro:macro name="agos_wheel" params="side y_sign pos x z mu">
     <link name="${side}_wheel_${pos}">
-      <visual>
-        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
-        <geometry>
-          <cylinder radius="${track_radius - 0.012}" length="${track_width - 0.01}"/>
-        </geometry>
-        <material name="agos_track_black"/>
-      </visual>
       <collision>
         <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
         <geometry>
-          <cylinder radius="${track_radius}" length="${track_width - 0.01}"/>
+          <cylinder radius="${wheel_radius}" length="${track_width}"/>
         </geometry>
       </collision>
       <inertial>
         <mass value="${wheel_mass}"/>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <inertia
-          ixx="${(wheel_mass/12.0)*(3*track_radius*track_radius + track_width*track_width)}" ixy="0.0" ixz="0.0"
-          iyy="${(wheel_mass/2.0)*track_radius*track_radius}" iyz="0.0"
-          izz="${(wheel_mass/12.0)*(3*track_radius*track_radius + track_width*track_width)}"/>
+          ixx="${(wheel_mass/12.0)*(3*wheel_radius*wheel_radius + track_width*track_width)}" ixy="0.0" ixz="0.0"
+          iyy="${(wheel_mass/2.0)*wheel_radius*wheel_radius}" iyz="0.0"
+          izz="${(wheel_mass/12.0)*(3*wheel_radius*wheel_radius + track_width*track_width)}"/>
       </inertial>
     </link>
 
     <joint name="${side}_wheel_${pos}_joint" type="continuous">
       <parent link="base_link"/>
       <child link="${side}_wheel_${pos}"/>
-      <origin xyz="${x} ${y_sign * track_separation/2} 0" rpy="0 0 0"/>
+      <origin xyz="${x} ${y_sign * track_y} ${z}" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <dynamics damping="0.1" friction="0.05"/>
     </joint>
 
     <gazebo reference="${side}_wheel_${pos}">
-      <!-- Apply the specific friction passed into the macro -->
       <mu1>${mu}</mu1>
       <mu2>${mu}</mu2>
     </gazebo>
   </xacro:macro>
 
   <xacro:macro name="agos_track" params="side y_sign">
-    <link name="${side}_track_frame">
-      <!-- center straight section -->
-      <visual>
-        <origin xyz="0 0 0" rpy="0 0 0"/>
-        <geometry>
-          <box size="${2*wheel_x_offset} ${track_width} ${2*track_radius}"/>
-        </geometry>
-        <material name="agos_track_black"/>
-      </visual>
-      <!-- front rounded end -->
-      <visual>
-        <origin xyz="${wheel_x_offset} 0 0" rpy="${pi/2} 0 0"/>
-        <geometry>
-          <cylinder radius="${track_radius}" length="${track_width}"/>
-        </geometry>
-        <material name="agos_track_black"/>
-      </visual>
-      <!-- rear rounded end -->
-      <visual>
-        <origin xyz="${-wheel_x_offset} 0 0" rpy="${pi/2} 0 0"/>
-        <geometry>
-          <cylinder radius="${track_radius}" length="${track_width}"/>
-        </geometry>
-        <material name="agos_track_black"/>
-      </visual>
-    </link>
-
-    <joint name="${side}_track_frame_joint" type="fixed">
-      <parent link="base_link"/>
-      <child link="${side}_track_frame"/>
-      <origin xyz="0 ${y_sign * track_separation/2} 0" rpy="0 0 0"/>
-    </joint>
-
-    <!-- FIX: Front and Rear slide laterally (mu=0.05), Mid has full grip (mu=1.0) -->
-    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="front" x="${wheel_x_offset}"  mu="0.05"/>
-    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="mid"   x="0"                  mu="1.0"/>
-    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="rear"  x="${-wheel_x_offset}" mu="0.05"/>
+    <!-- Outer road wheels slide sideways easily (mu 0.05) so the robot can
+         skid-steer; the two middle ones carry the grip (mu 1.0). -->
+    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="idler_front" x="0.29"    z="-0.05"       mu="0.8"/>
+    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="road_1"      x="0.2029"  z="${wheel_z}" mu="0.05"/>
+    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="road_2"      x="0.0759"  z="${wheel_z}" mu="1.0"/>
+    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="road_3"      x="-0.0511" z="${wheel_z}" mu="1.0"/>
+    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="road_4"      x="-0.2058" z="${wheel_z}" mu="0.05"/>
+    <xacro:agos_wheel side="${side}" y_sign="${y_sign}" pos="idler_rear"  x="-0.29"   z="-0.05"       mu="0.8"/>
   </xacro:macro>
 
-  <!-- Differential Drive Plugin -->
+  <!-- Differential Drive Plugin: every wheel on a side turns together, like a track -->
   <gazebo>
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
-      <left_joint>left_wheel_front_joint</left_joint>
-      <left_joint>left_wheel_mid_joint</left_joint>
-      <left_joint>left_wheel_rear_joint</left_joint>
-      <right_joint>right_wheel_front_joint</right_joint>
-      <right_joint>right_wheel_mid_joint</right_joint>
-      <right_joint>right_wheel_rear_joint</right_joint>
+      <left_joint>left_wheel_idler_front_joint</left_joint>
+      <left_joint>left_wheel_road_1_joint</left_joint>
+      <left_joint>left_wheel_road_2_joint</left_joint>
+      <left_joint>left_wheel_road_3_joint</left_joint>
+      <left_joint>left_wheel_road_4_joint</left_joint>
+      <left_joint>left_wheel_idler_rear_joint</left_joint>
+      <right_joint>right_wheel_idler_front_joint</right_joint>
+      <right_joint>right_wheel_road_1_joint</right_joint>
+      <right_joint>right_wheel_road_2_joint</right_joint>
+      <right_joint>right_wheel_road_3_joint</right_joint>
+      <right_joint>right_wheel_road_4_joint</right_joint>
+      <right_joint>right_wheel_idler_rear_joint</right_joint>
       <wheel_separation>${track_separation}</wheel_separation>
-      <wheel_radius>${track_radius}</wheel_radius>
+      <wheel_radius>${wheel_radius}</wheel_radius>
       <topic>cmd_vel</topic>
       <odom_topic>odom</odom_topic>
       <tf_topic>/model/agos/tf_odom_raw</tf_topic>

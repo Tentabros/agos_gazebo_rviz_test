@@ -165,5 +165,66 @@
       </link>
     </model>
 
+    <!-- Boundary room (10 m x 8 m, 1 m tall). Gives the 2D LiDAR something to
+         hit in every direction so RTAB-Map's ICP scan matching has enough
+         structure. In an open plane most beams return nothing and the few
+         objects alone are not enough to register scans reliably. -->
+    <model name="boundary_room">
+      <pose>1 0 0 0 0 0</pose>
+      <static>true</static>
+      <link name="north_wall">
+        <pose>0 4.05 0.5 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>10.2 0.1 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>10.2 0.1 1.0</size></box></geometry>
+          <material>
+            <ambient>0.85 0.80 0.70 1</ambient>
+            <diffuse>0.85 0.80 0.70 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <link name="south_wall">
+        <pose>0 -4.05 0.5 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>10.2 0.1 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>10.2 0.1 1.0</size></box></geometry>
+          <material>
+            <ambient>0.85 0.80 0.70 1</ambient>
+            <diffuse>0.85 0.80 0.70 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <link name="east_wall">
+        <pose>5.05 0 0.5 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.1 8.0 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 8.0 1.0</size></box></geometry>
+          <material>
+            <ambient>0.85 0.80 0.70 1</ambient>
+            <diffuse>0.85 0.80 0.70 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <link name="west_wall">
+        <pose>-5.05 0 0.5 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.1 8.0 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 8.0 1.0</size></box></geometry>
+          <material>
+            <ambient>0.85 0.80 0.70 1</ambient>
+            <diffuse>0.85 0.80 0.70 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
   </world>
 </sdf>

@@ -2,39 +2,46 @@
 <robot name="agos" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <!-- ===================== Dimensions =====================
-       Everything is derived from the working tracked_robot track:
-         track belt 0.6 long x 0.06 wide x 0.16 tall (radius 0.08)
-         track centre-to-centre separation 0.36  -> 0.30 gap between the tracks
-       Envelope: 600 x 420 x 320 mm (L x W x H), excluding LiDAR and pole.
-       Lower half = tracks, upper half = body. chassis_height = 4*track_radius. -->
+       Measured from the CAD export Designs/STL/AGOS V1.stl (Fusion, mm).
+       The CAD model faces +y; here it is rotated so +x is forward, and scaled
+       to metres. base_link sits at the CAD origin, 0.178 m above the ground.
+         Body envelope : 0.711 L x 0.381 W x 0.476 H (ground to top of LiDAR)
+         Tracks        : 0.042 wide tread, centred 0.1436 m either side,
+                         flat contact patch from x = -0.21 to +0.21
+         Road wheels   : 4 rollers per side inside each track
+         Rear tether conduit (about 0.69 m long) is visual only.
+       The meshes in meshes/agos_*.stl are a simplified copy of that CAD file
+       (see tools/convert_robot_stl.py). -->
 
-  <!-- Track (matches the working track code) -->
-  <xacro:property name="track_radius"     value="0.08"/>
-  <xacro:property name="track_width"      value="0.06"/>
-  <xacro:property name="track_separation" value="0.36"/>
-  <xacro:property name="track_length"     value="0.6"/>
-  <xacro:property name="wheel_mass"       value="0.5"/>
-  <xacro:property name="track_mu"         value="0.4"/>
+  <!-- Track / wheels -->
+  <xacro:property name="ground_to_base"   value="0.178"/>   <!-- ground -> base_link -->
+  <xacro:property name="track_y"          value="0.1436"/>  <!-- track centre, either side -->
+  <xacro:property name="track_width"      value="0.042"/>
+  <xacro:property name="track_separation" value="${2*track_y}"/>
+  <xacro:property name="wheel_radius"     value="0.0385"/>
+  <xacro:property name="wheel_z"          value="${wheel_radius - ground_to_base}"/>
+  <xacro:property name="wheel_mass"       value="0.25"/>
 
-  <!-- Envelope (derived) -->
-  <xacro:property name="chassis_length" value="${track_length}"/>
-  <xacro:property name="chassis_width"  value="${track_separation + track_width}"/>
-  <xacro:property name="chassis_height" value="${4*track_radius}"/>
+  <!-- Chassis -->
+  <xacro:property name="chassis_length" value="0.66"/>
+  <xacro:property name="chassis_width"  value="0.381"/>  <!-- overall, incl. tracks -->
+  <xacro:property name="chassis_height" value="0.40"/>
   <xacro:property name="chassis_mass"   value="15.0"/>
-  <xacro:property name="wheel_x_offset" value="${chassis_length/2 - track_radius}"/>
-
-  <!-- Belly pan between the tracks (z measured from the ground) -->
-  <xacro:property name="belly_height"   value="0.10"/>
-  <xacro:property name="belly_center_z" value="0.10"/>
-
-  <!-- Body above the tracks, measured from the track top -->
-  <xacro:property name="body_height"   value="${chassis_height/2}"/>
-  <xacro:property name="lidar_mount_h" value="0.05"/>
-  <xacro:property name="whip_length"   value="0.28"/>
 
   <xacro:include filename="$(find agos_sim)/urdf/agos_materials.xacro"/>
   <xacro:include filename="$(find agos_sim)/urdf/agos_tracks.xacro"/>
   <xacro:include filename="$(find agos_sim)/urdf/agos_sensors.xacro"/>
+
+  <!-- One coloured part of the CAD model (already in metres, +x forward) -->
+  <xacro:macro name="agos_mesh_visual" params="part material">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agos_sim/meshes/agos_${part}.stl"/>
+      </geometry>
+      <material name="${material}"/>
+    </visual>
+  </xacro:macro>
 
   <!-- ===================== base_footprint -> base_link -> chassis_link ===================== -->
   <link name="base_footprint"/>
@@ -42,89 +49,50 @@
   <joint name="base_footprint_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="base_link"/>
-    <origin xyz="0 0 ${track_radius}" rpy="0 0 0"/>
+    <origin xyz="0 0 ${ground_to_base}" rpy="0 0 0"/>
   </joint>
 
   <link name="base_link"/>
 
-  <!-- chassis_link origin = envelope center (ground + chassis_height/2 = track top) -->
   <joint name="base_link_to_chassis" type="fixed">
     <parent link="base_link"/>
     <child link="chassis_link"/>
-    <origin xyz="0 0 ${chassis_height/2 - track_radius}" rpy="0 0 0"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
   </joint>
 
   <link name="chassis_link">
 
-    <!-- Green belly pan, between the tracks -->
-    <visual>
-      <origin xyz="0 0 ${belly_center_z - chassis_height/2}" rpy="0 0 0"/>
-      <geometry>
-        <box size="${chassis_length - 0.06} ${track_separation - track_width - 0.004} ${belly_height}"/>
-      </geometry>
-      <material name="agos_green_body"/>
-    </visual>
+    <!-- Visual: the CAD model, split by its colours -->
+    <xacro:agos_mesh_visual part="body"    material="agos_body_grey"/>
+    <xacro:agos_mesh_visual part="treads"  material="agos_tread_red"/>
+    <xacro:agos_mesh_visual part="accents" material="agos_accent_yellow"/>
+    <xacro:agos_mesh_visual part="light"   material="agos_light_grey"/>
+    <xacro:agos_mesh_visual part="green"   material="agos_green_body"/>
+    <xacro:agos_mesh_visual part="dark"    material="agos_sensor_dark"/>
 
-    <!-- Silver main body enclosure -->
-    <visual>
-      <origin xyz="0 0 ${(body_height - 0.01)/2}" rpy="0 0 0"/>
-      <geometry>
-        <box size="${chassis_length - 0.08} ${chassis_width - 0.02} ${body_height - 0.01}"/>
-      </geometry>
-      <material name="agos_silver_enclosure"/>
-    </visual>
-
-    <!-- Green top lid plate -->
-    <visual>
-      <origin xyz="0 0 ${body_height - 0.005}" rpy="0 0 0"/>
-      <geometry>
-        <box size="${chassis_length - 0.10} ${chassis_width - 0.04} 0.01"/>
-      </geometry>
-      <material name="agos_green_body"/>
-    </visual>
-
-    <!-- Front roll-cage arch -->
-    <visual>
-      <origin xyz="0.17 0 ${body_height/2}" rpy="0 0 0"/>
-      <geometry>
-        <box size="0.03 ${chassis_width} ${body_height + 0.01}"/>
-      </geometry>
-      <material name="agos_dark_grey_frame"/>
-    </visual>
-
-    <!-- Rear roll-cage arch -->
-    <visual>
-      <origin xyz="-0.17 0 ${body_height/2}" rpy="0 0 0"/>
-      <geometry>
-        <box size="0.03 ${chassis_width} ${body_height + 0.01}"/>
-      </geometry>
-      <material name="agos_dark_grey_frame"/>
-    </visual>
-
-    <!-- Rear whip pole / antenna (visual only) -->
-    <visual>
-      <origin xyz="${-chassis_length/2 - whip_length/2 + 0.05} 0 ${body_height/2}" rpy="0 ${pi/2} 0"/>
-      <geometry>
-        <cylinder radius="0.01" length="${whip_length}"/>
-      </geometry>
-      <material name="agos_sensor_dark"/>
-    </visual>
-
-    <!-- Yellow LiDAR pedestal (the LiDAR itself is in agos_sensors.xacro) -->
-    <visual>
-      <origin xyz="0 0 ${body_height + lidar_mount_h/2}" rpy="0 0 0"/>
-      <geometry>
-        <box size="0.08 0.08 ${lidar_mount_h}"/>
-      </geometry>
-      <material name="agos_lidar_yellow"/>
-    </visual>
-
-    <!-- Collision: upper body only. Tracks/wheels carry ground contact. -->
+    <!-- Collision: simple boxes that follow the body's cross-section (lid
+         0.28 m wide on top, narrowing to the belly between the tracks). The
+         tracks' ground contact is carried by the wheel cylinders in
+         agos_tracks.xacro. -->
+    <!-- Lid and upper hull -->
     <collision>
-      <origin xyz="0 0 ${body_height/2}" rpy="0 0 0"/>
-      <geometry>
-        <box size="${chassis_length - 0.08} ${chassis_width} ${body_height}"/>
-      </geometry>
+      <origin xyz="0 0 0.1543" rpy="0 0 0"/>
+      <geometry><box size="${chassis_length} 0.28 0.1486"/></geometry>
+    </collision>
+    <!-- Lower hull and belly between the tracks -->
+    <collision>
+      <origin xyz="0 0 -0.01" rpy="0 0 0"/>
+      <geometry><box size="0.62 0.22 0.18"/></geometry>
+    </collision>
+    <!-- Camera housing on the front of the lid -->
+    <collision>
+      <origin xyz="0.3066 0 0.2400" rpy="0 0 0"/>
+      <geometry><box size="0.099 0.165 0.074"/></geometry>
+    </collision>
+    <!-- LiDAR and its pedestal -->
+    <collision>
+      <origin xyz="0 0 0.2508" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.04" length="0.0952"/></geometry>
     </collision>
 
     <inertial>

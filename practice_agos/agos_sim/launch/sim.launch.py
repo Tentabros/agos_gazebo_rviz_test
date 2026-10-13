@@ -1,10 +1,11 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (AppendEnvironmentVariable, DeclareLaunchArgument,
+                            IncludeLaunchDescription)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 import xacro
 
@@ -20,9 +21,19 @@ def generate_launch_description():
     # ---------- Launch arguments ----------
     args = [
         DeclareLaunchArgument(
-            'world', default_value='agos_world.sdf',
-            description='World file name inside agos_sim/worlds. It must load the '
-                        'Sensors and IMU systems or the sensors stay silent.'),
+            'world', default_value='agos_pipe.sdf',
+            description='World file name inside agos_sim/worlds (agos_pipe.sdf or '
+                        'agos_world.sdf). It must load the Sensors and IMU systems '
+                        'or the sensors stay silent.'),
+        # Default spawn pose: middle of the pipe's longest straight, facing +x,
+        # tracks just above the curved floor of the 600 mm bore.
+        DeclareLaunchArgument('spawn_x', default_value='0.0'),
+        DeclareLaunchArgument('spawn_y', default_value='0.0'),
+        DeclareLaunchArgument('spawn_z', default_value='0.16'),
+        DeclareLaunchArgument('spawn_yaw', default_value='0.0'),
+        DeclareLaunchArgument(
+            'headless', default_value='false',
+            description='Run the Gazebo server only, without its GUI window'),
         DeclareLaunchArgument(
             'rviz', default_value='true',
             description='Start RViz'),
@@ -41,11 +52,18 @@ def generate_launch_description():
     )
 
     # ---------- Gazebo ----------
+    # Lets Gazebo resolve model://agos_sim/meshes/... (the pipe in the world
+    # file, and the robot meshes: package:// URIs in the URDF become model://)
+    gz_resource_path = AppendEnvironmentVariable(
+        'GZ_SIM_RESOURCE_PATH', os.path.dirname(pkg_path))
+
+    gz_flags = PythonExpression(
+        ["'-r -s' if '", LaunchConfiguration('headless'), "' == 'true' else '-r'"])
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(
             get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
         launch_arguments={
-            'gz_args': ['-r ', PathJoinSubstitution(
+            'gz_args': [gz_flags, ' ', PathJoinSubstitution(
                 [pkg_path, 'worlds', LaunchConfiguration('world')])],
         }.items(),
     )
@@ -55,28 +73,21 @@ def generate_launch_description():
         executable='create',
         arguments=['-topic', 'robot_description',
                    '-name', 'agos',
-                   '-z', '0.2'],
+                   '-x', LaunchConfiguration('spawn_x'),
+                   '-y', LaunchConfiguration('spawn_y'),
+                   '-z', LaunchConfiguration('spawn_z'),
+                   '-Y', LaunchConfiguration('spawn_yaw')],
         output='screen'
     )
 
     # ---------- Bridges ----------
-    # All topics (clock, cmd_vel, odom, joint_states, scan, imu, camera) live in config/bridge.yaml
+    # All topics (clock, cmd_vel, odom, joint_states, scan, imu, camera) live in
+    # config/bridge.yaml. /clock MUST be bridged: every node here runs with
+    # use_sim_time, and without /clock their clocks stay at zero.
     bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
-        arguments=[
-            '/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist',
-            '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
-            '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
-            '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
-            # SENSOR BRIDGES ADDED BELOW:
-            '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
-            '/camera/image@sensor_msgs/msg/Image[gz.msgs.Image',
-            '/camera/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
-            '/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
-            '/camera/points@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked', # <-- ADD THIS LINE
-            '/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
-        ],
+        parameters=[{'config_file': bridge_config}],
         output='screen'
     )
 
@@ -104,6 +115,7 @@ def generate_launch_description():
 
     return LaunchDescription(args + [
         node_robot_state_publisher,
+        gz_resource_path,
         gazebo,
         spawn_entity,
         bridge,

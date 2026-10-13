@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <material name="agos_chassis_grey">
+    <color rgba="0.35 0.35 0.38 1.0"/>
+  </material>
+  <material name="agos_track_black">
+    <color rgba="0.08 0.08 0.08 1.0"/>
+  </material>
+  <material name="agos_sensor_dark">
+    <color rgba="0.10 0.10 0.12 1.0"/>
+  </material>
+
+  <!-- Added from the primitive-shape design -->
+  <material name="agos_green_body">
+    <color rgba="0.15 0.55 0.25 1.0"/>
+  </material>
+  <material name="agos_silver_enclosure">
+    <color rgba="0.75 0.75 0.78 1.0"/>
+  </material>
+  <material name="agos_dark_grey_frame">
+    <color rgba="0.20 0.20 0.20 1.0"/>
+  </material>
+  <material name="agos_lidar_yellow">
+    <color rgba="0.95 0.70 0.00 1.0"/>
+  </material>
+
+</robot>

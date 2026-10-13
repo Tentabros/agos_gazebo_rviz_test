@@ -1,1 +1,0 @@
-/home/reuel/practice_gazebo/src/agos_sim/launch/sim.launch.py

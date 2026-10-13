@@ -1,0 +1,17 @@
+running develop
+running egg_info
+writing agos_sim.egg-info/PKG-INFO
+writing dependency_links to agos_sim.egg-info/dependency_links.txt
+writing requirements to agos_sim.egg-info/requires.txt
+writing top-level names to agos_sim.egg-info/top_level.txt
+reading manifest file 'agos_sim.egg-info/SOURCES.txt'
+writing manifest file 'agos_sim.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/reuel/practice_agos/install/agos_sim/lib/python3.14/site-packages/agos-sim.egg-link (link to .)
+
+Installed /home/reuel/practice_agos/build/agos_sim
+running symlink_data
+symbolically linking /home/reuel/practice_agos/build/agos_sim/urdf/agos_tracks.xacro -> /home/reuel/practice_agos/install/agos_sim/share/agos_sim/urdf
+symbolically linking /home/reuel/practice_agos/build/agos_sim/urdf/agos_materials.xacro -> /home/reuel/practice_agos/install/agos_sim/share/agos_sim/urdf
+symbolically linking /home/reuel/practice_agos/build/agos_sim/urdf/agos_sensors.xacro -> /home/reuel/practice_agos/install/agos_sim/share/agos_sim/urdf
+symbolically linking /home/reuel/practice_agos/build/agos_sim/urdf/agos_urdf.xacro -> /home/reuel/practice_agos/install/agos_sim/share/agos_sim/urdf

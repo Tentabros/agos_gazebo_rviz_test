@@ -65,7 +65,7 @@
       <right_joint>right_wheel_road_3_joint</right_joint>
       <right_joint>right_wheel_road_4_joint</right_joint>
       <right_joint>right_wheel_idler_rear_joint</right_joint>
-      <wheel_separation>${track_separation}</wheel_separation>
+      <wheel_separation>${track_separation * skid_factor}</wheel_separation>
       <wheel_radius>${wheel_radius}</wheel_radius>
       <topic>cmd_vel</topic>
       <odom_topic>odom</odom_topic>

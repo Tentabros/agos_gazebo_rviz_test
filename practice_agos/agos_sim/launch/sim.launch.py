@@ -3,7 +3,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (AppendEnvironmentVariable, DeclareLaunchArgument,
                             IncludeLaunchDescription)
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
@@ -14,6 +14,7 @@ def generate_launch_description():
     pkg_path = get_package_share_directory('agos_sim')
     xacro_file = os.path.join(pkg_path, 'urdf', 'agos_urdf.xacro')
     bridge_config = os.path.join(pkg_path, 'config', 'bridge.yaml')
+    ekf_config = os.path.join(pkg_path, 'config', 'ekf.yaml')
     rviz_config = os.path.join(pkg_path, 'rviz', 'agos.rviz')
 
     robot_desc = xacro.process_file(xacro_file).toxml()
@@ -21,15 +22,19 @@ def generate_launch_description():
     # ---------- Launch arguments ----------
     args = [
         DeclareLaunchArgument(
-            'world', default_value='agos_pipe.sdf',
-            description='World file name inside agos_sim/worlds (agos_pipe.sdf or '
-                        'agos_world.sdf). It must load the Sensors and IMU systems '
+            'world', default_value='agos_sewer.sdf',
+            description='World file name inside agos_sim/worlds: agos_sewer.sdf '
+                        '(900 mm sewer network with manholes, the default), '
+                        'agos_pipe.sdf (your CAD pipe at 900 mm) or agos_world.sdf '
+                        '(open ground). It must load the Sensors and IMU systems '
                         'or the sensors stay silent.'),
-        # Default spawn pose: middle of the pipe's longest straight, facing +x,
-        # tracks just above the curved floor of the 600 mm bore.
+        # Default spawn pose: the world origin facing +x. That is the middle of
+        # chamber A in agos_sewer.sdf and the middle of the longest straight in
+        # agos_pipe.sdf. z puts the tracks just above the floor (0.124 m in the
+        # chambers, about 0.12 m where the tracks touch the 900 mm pipe).
         DeclareLaunchArgument('spawn_x', default_value='0.0'),
         DeclareLaunchArgument('spawn_y', default_value='0.0'),
-        DeclareLaunchArgument('spawn_z', default_value='0.16'),
+        DeclareLaunchArgument('spawn_z', default_value='0.14'),
         DeclareLaunchArgument('spawn_yaw', default_value='0.0'),
         DeclareLaunchArgument(
             'headless', default_value='false',
@@ -38,9 +43,10 @@ def generate_launch_description():
             'rviz', default_value='true',
             description='Start RViz'),
         DeclareLaunchArgument(
-            'odom_tf', default_value='true',
-            description='Bridge the DiffDrive odom->base_footprint TF onto /tf. '
-                        'Set false once an EKF publishes that transform.'),
+            'ekf', default_value='true',
+            description='Odometry from the EKF (track speed + IMU turn rate, '
+                        'config/ekf.yaml). false = raw track odometry, which '
+                        'over-counts turns in pipe bends.'),
     ]
 
     # ---------- Robot description ----------
@@ -57,8 +63,11 @@ def generate_launch_description():
     gz_resource_path = AppendEnvironmentVariable(
         'GZ_SIM_RESOURCE_PATH', os.path.dirname(pkg_path))
 
+    # headless: server only; --headless-rendering keeps the camera and LiDAR
+    # working without a display
     gz_flags = PythonExpression(
-        ["'-r -s' if '", LaunchConfiguration('headless'), "' == 'true' else '-r'"])
+        ["'-r -s --headless-rendering' if '", LaunchConfiguration('headless'),
+         "' == 'true' else '-r'"])
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(
             get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
@@ -91,15 +100,32 @@ def generate_launch_description():
         output='screen'
     )
 
+    # ---------- Odometry ----------
+    # The DiffDrive track odometry arrives on /wheel/odom (config/bridge.yaml).
+    # ekf:=true  -> the EKF fuses it with the IMU gyro and publishes /odom and
+    #               the odom -> base_footprint TF.
+    # ekf:=false -> /odom and the TF come straight from DiffDrive.
+    use_ekf = IfCondition(LaunchConfiguration('ekf'))
+    no_ekf = UnlessCondition(LaunchConfiguration('ekf'))
+    ekf = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        parameters=[ekf_config, {'use_sim_time': True}],
+        remappings=[('odometry/filtered', '/odom')],
+        condition=use_ekf,
+        output='screen'
+    )
     # DiffDrive publishes its TF on /model/agos/tf_odom_raw (see agos_tracks.xacro)
-    odom_tf_bridge = Node(
+    raw_odom_bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
-        name='odom_tf_bridge',
-        arguments=['/model/agos/tf_odom_raw@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V'],
+        name='raw_odom_bridge',
+        arguments=['/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+                   '/model/agos/tf_odom_raw@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V'],
         remappings=[('/model/agos/tf_odom_raw', '/tf')],
         parameters=[{'use_sim_time': True}],
-        condition=IfCondition(LaunchConfiguration('odom_tf')),
+        condition=no_ekf,
         output='screen'
     )
 
@@ -119,6 +145,7 @@ def generate_launch_description():
         gazebo,
         spawn_entity,
         bridge,
-        odom_tf_bridge,
+        ekf,
+        raw_odom_bridge,
         rviz,
     ])

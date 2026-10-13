@@ -9,7 +9,8 @@
          Tracks        : 0.042 wide tread, centred 0.1436 m either side,
                          flat contact patch from x = -0.21 to +0.21
          Road wheels   : 4 rollers per side inside each track
-         Rear tether conduit (about 0.69 m long) is visual only.
+         The tether tube out of the back of the CAD model is left out of the
+         meshes (tools/convert_robot_stl.py): it is a cable, not a rigid part.
        The meshes in meshes/agos_*.stl are a simplified copy of that CAD file
        (see tools/convert_robot_stl.py). -->
 
@@ -18,6 +19,13 @@
   <xacro:property name="track_y"          value="0.1436"/>  <!-- track centre, either side -->
   <xacro:property name="track_width"      value="0.042"/>
   <xacro:property name="track_separation" value="${2*track_y}"/>
+  <!-- A tracked robot skids sideways when it turns, so it turns less than
+       its track speeds say: in Gazebo it turns 0.77x as far as plain
+       diff-drive maths predicts. DiffDrive uses this wider "effective" track
+       separation (0.287 m / 0.77) so a commanded turn rate is what the robot
+       really does, and /odom reports the turn it really made. Re-measure if
+       you change the wheels or their friction. -->
+  <xacro:property name="skid_factor"      value="1.30"/>
   <xacro:property name="wheel_radius"     value="0.0385"/>
   <xacro:property name="wheel_z"          value="${wheel_radius - ground_to_base}"/>
   <xacro:property name="wheel_mass"       value="0.25"/>

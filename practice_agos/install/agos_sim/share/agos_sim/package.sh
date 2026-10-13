@@ -52,7 +52,7 @@ _colcon_prepend_unique_value() {
 # since a plain shell script can't determine its own path when being sourced
 # either use the provided COLCON_CURRENT_PREFIX
 # or fall back to the build time prefix (if it exists)
-_colcon_package_sh_COLCON_CURRENT_PREFIX="/home/reuel/practice_agos/install/agos_sim"
+_colcon_package_sh_COLCON_CURRENT_PREFIX="/run/media/sazoverse/3228b30c-6f8e-4590-8359-973ebc8d68b0/School/Others/AGOS/Testing/ROS2/agos_gazebo_rviz_test/practice_agos/install/agos_sim"
 if [ -z "$COLCON_CURRENT_PREFIX" ]; then
   if [ ! -d "$_colcon_package_sh_COLCON_CURRENT_PREFIX" ]; then
     echo "The build time path \"$_colcon_package_sh_COLCON_CURRENT_PREFIX\" doesn't exist. Either source a script for a different shell or set the environment variable \"COLCON_CURRENT_PREFIX\" explicitly." 1>&2

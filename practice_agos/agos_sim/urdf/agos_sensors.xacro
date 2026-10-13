@@ -141,14 +141,28 @@
       <origin xyz="0 0 0.01" rpy="0 0 0"/>
     </joint>
 
-    <!-- Requires the gz-sim-imu-system world plugin (in worlds/agos_pipe.sdf
-         and worlds/agos_world.sdf) or this topic stays silent. -->
+    <!-- Requires the gz-sim-imu-system world plugin (in all three worlds)
+         or this topic stays silent. The EKF (config/ekf.yaml) takes the
+         robot's turn rate from this gyro. The noise is roughly that of a
+         low-cost MEMS IMU. -->
     <gazebo reference="imu_link">
       <sensor name="agos_imu" type="imu">
         <always_on>true</always_on>
         <update_rate>100</update_rate>
         <topic>imu/data</topic>
         <gz_frame_id>imu_link</gz_frame_id>
+        <imu>
+          <angular_velocity>
+            <x><noise type="gaussian"><mean>0</mean><stddev>0.002</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0</mean><stddev>0.002</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0</mean><stddev>0.002</stddev></noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type="gaussian"><mean>0</mean><stddev>0.02</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0</mean><stddev>0.02</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0</mean><stddev>0.02</stddev></noise></z>
+          </linear_acceleration>
+        </imu>
       </sensor>
     </gazebo>
   </xacro:macro>

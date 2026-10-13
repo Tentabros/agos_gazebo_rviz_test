@@ -1,5 +1,6 @@
 import os
 import tempfile
+import xml.etree.ElementTree as ET
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -12,11 +13,6 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 # Run this AFTER sim.launch.py is up (it provides /clock, sensors, odom and TF).
-
-# Rectangle around the 0.711 x 0.381 m body in agos_urdf.xacro (base_link
-# frame). Nav2's stock params assume a 0.22 m round TurtleBot; a circle around
-# AGOS would need a 0.40 m radius, wider than the pipe it drives in.
-FOOTPRINT = '[[0.356, 0.191], [0.356, -0.191], [-0.356, -0.191], [-0.356, 0.191]]'
 
 # Camera topics as named in config/bridge.yaml
 RTABMAP_REMAPPINGS = [
@@ -50,27 +46,66 @@ RTABMAP_PARAMS = {
 }
 
 
-def _write_nav2_params(nav2_bringup_dir):
-    """Copy Nav2's stock params with the few values AGOS needs changed."""
-    src = os.path.join(nav2_bringup_dir, 'params', 'nav2_params.yaml')
-    with open(src, 'r') as f:
-        params = yaml.safe_load(f)
+def _merge(base, extra):
+    """Recursively copy the values in extra over base."""
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge(base[key], value)
+        else:
+            base[key] = value
 
-    def patch(node):
+
+def _bt_without_spin(name):
+    """Copy one of Nav2's stock behaviour trees without its Spin recovery.
+
+    Spinning on the spot is fine in a room but not in a pipe: the tracks climb
+    the curved wall. The other recoveries (clear costmaps, wait, back up) stay.
+    Returns the new file, or None to keep Nav2's default.
+    """
+    try:
+        src = os.path.join(get_package_share_directory('nav2_bt_navigator'),
+                           'behavior_trees', name)
+        tree = ET.parse(src)
+    except (OSError, ET.ParseError, LookupError):
+        return None
+    for parent in list(tree.iter()):
+        for child in list(parent):
+            if child.tag == 'Spin':
+                parent.remove(child)
+    out = os.path.join(tempfile.gettempdir(), 'agos_' + name)
+    tree.write(out)
+    return out
+
+
+def _write_nav2_params(nav2_bringup_dir):
+    """Nav2's stock params with config/nav2_agos.yaml merged over them."""
+    with open(os.path.join(nav2_bringup_dir, 'params', 'nav2_params.yaml'), 'r') as f:
+        params = yaml.safe_load(f)
+    agos = os.path.join(get_package_share_directory('agos_sim'), 'config', 'nav2_agos.yaml')
+    with open(agos, 'r') as f:
+        _merge(params, yaml.safe_load(f))
+
+    # The Gazebo bridge and DiffDrive use plain geometry_msgs/Twist on /cmd_vel.
+    # Newer Nav2 publishes TwistStamped by default, which the bridge ignores.
+    def unstamp(node):
         if isinstance(node, dict):
-            if 'robot_radius' in node:   # a costmap: use the real outline
-                node['footprint'] = FOOTPRINT
             for key, value in node.items():
                 if key == 'enable_stamped_cmd_vel':
                     node[key] = False
                 else:
-                    patch(value)
-
-    patch(params)
-    # The Gazebo bridge and DiffDrive use plain geometry_msgs/Twist on /cmd_vel.
-    # Newer Nav2 publishes TwistStamped by default, which the bridge ignores.
+                    unstamp(value)
+    unstamp(params)
     params.setdefault('/**', {}).setdefault('ros__parameters', {})[
         'enable_stamped_cmd_vel'] = False
+
+    bt = params.setdefault('bt_navigator', {}).setdefault('ros__parameters', {})
+    for key, name in (('default_nav_to_pose_bt_xml',
+                       'navigate_to_pose_w_replanning_and_recovery.xml'),
+                      ('default_nav_through_poses_bt_xml',
+                       'navigate_through_poses_w_replanning_and_recovery.xml')):
+        tree = _bt_without_spin(name)
+        if tree:
+            bt[key] = tree
 
     out = os.path.join(tempfile.gettempdir(), 'agos_nav2_params.yaml')
     with open(out, 'w') as f:

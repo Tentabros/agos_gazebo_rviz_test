@@ -1,6 +1,7 @@
 # ros_gz_bridge config for AGOS.
-# The odom -> base_footprint TF is bridged separately in the launch file
-# (arg odom_tf) so it can be switched off when an EKF takes over.
+# The DiffDrive (track) odometry is bridged to /wheel/odom. The robot's
+# odometry, /odom and the odom -> base_footprint TF, comes from the EKF in
+# sim.launch.py (config/ekf.yaml), which corrects its heading with the IMU.
 
 # ---------- Sim time ----------
 - ros_topic_name: "/clock"
@@ -16,7 +17,7 @@
   gz_type_name: "gz.msgs.Twist"
   direction: ROS_TO_GZ
 
-- ros_topic_name: "/odom"
+- ros_topic_name: "/wheel/odom"
   gz_topic_name: "/odom"
   ros_type_name: "nav_msgs/msg/Odometry"
   gz_type_name: "gz.msgs.Odometry"

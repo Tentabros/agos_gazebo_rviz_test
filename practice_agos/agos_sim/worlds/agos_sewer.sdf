@@ -1,0 +1,137 @@
+<?xml version="1.0"?>
+<sdf version="1.10">
+  <world name="agos_sewer">
+
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <gravity>0 0 -9.8</gravity>
+
+    <!-- Ambient light is what lights the inside of the pipe (the sun is
+         shadowed there); the robot also carries a front headlight. -->
+    <scene>
+      <ambient>0.5 0.5 0.5 1</ambient>
+      <background>0.7 0.8 0.9 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>100 100</size></plane>
+          </geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>100 100</size></plane>
+          </geometry>
+          <material>
+            <ambient>0.6 0.6 0.6 1</ambient>
+            <diffuse>0.6 0.6 0.6 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Sewer test network: 900 mm concrete pipes between four manhole
+         chambers (2.4 x 2.4 m inside, 1.8 m high, open access shaft in the
+         roof).
+
+            D ===== S-bend ===== C        A (0, 0)    B (16, 0)
+            |                    |        C (16, 11)  D (0, 12.85)
+            |                    |
+            A ================== B ==.   dead-end branch off B: 3 m east,
+                                     ||   a 90 deg bend, 5 m south, capped
+                                     ==
+
+         The robot spawns in chamber A at the origin, facing B (+x). The
+         chambers are the only places it can turn round; in the pipes it
+         drives forwards or backwards. 47 m of pipe round the loop.
+         The bottom inside the pipes is at z = 0.1 (the pipes rest on the
+         ground); the chamber floors are 24 mm higher, level with where the
+         tracks touch the pipe, with benching up to each pipe opening. Regenerate with
+         tools/make_pipe_mesh.py and tools/make_pipe_texture.py. -->
+    <model name="agos_sewer">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="link">
+        <collision name="pipes_collision">
+          <geometry>
+            <mesh><uri>model://agos_sim/meshes/agos_sewer_pipes.stl</uri></mesh>
+          </geometry>
+          <surface>
+            <friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="pipes_visual">
+          <geometry>
+            <mesh><uri>model://agos_sim/meshes/agos_sewer_pipes.obj</uri></mesh>
+          </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+            <pbr>
+              <metal>
+                <albedo_map>model://agos_sim/materials/textures/pipe_concrete.jpg</albedo_map>
+                <normal_map>model://agos_sim/materials/textures/pipe_concrete_normal.jpg</normal_map>
+                <roughness>0.9</roughness>
+                <metalness>0.0</metalness>
+              </metal>
+            </pbr>
+          </material>
+        </visual>
+        <collision name="chambers_collision">
+          <geometry>
+            <mesh><uri>model://agos_sim/meshes/agos_sewer_chambers.stl</uri></mesh>
+          </geometry>
+          <surface>
+            <friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="chambers_visual">
+          <geometry>
+            <mesh><uri>model://agos_sim/meshes/agos_sewer_chambers.obj</uri></mesh>
+          </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+            <pbr>
+              <metal>
+                <albedo_map>model://agos_sim/materials/textures/chamber_concrete.jpg</albedo_map>
+                <normal_map>model://agos_sim/materials/textures/chamber_concrete_normal.jpg</normal_map>
+                <roughness>0.9</roughness>
+                <metalness>0.0</metalness>
+              </metal>
+            </pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

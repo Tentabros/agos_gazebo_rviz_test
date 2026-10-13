@@ -13,7 +13,11 @@ too heavy for Gazebo and RViz, so this script:
        - larger pieces are simplified as far as they keep their shape (size
          within 0.5 mm or 1 %, area within 6 %, volume within 5 %);
        - long chain and rail pieces that cannot be simplified become a box,
-  3. turns the result to face +x (ROS convention), converts mm to m and writes
+  3. leaves out the tether: the 25 mm tube that runs 0.69 m out of the back
+     of the body (the communication and power cable to the base station). In
+     the real robot it trails behind and bends, so it must not be a rigid part.
+     The green fitting it plugs into stays. Use --keep-tether to keep it.
+  4. turns the result to face +x (ROS convention), converts mm to m and writes
      meshes/agos_<part>.stl. The CAD origin stays the origin (= base_link).
 
 Needs numpy, scipy and fast-simplification (pip install fast-simplification),
@@ -48,6 +52,8 @@ ROD_RATIO = 1.3     # a piece whose two short sides are this close is treated as
 SIZE_TOL_MM = 0.5   # simplified piece must keep its size to within this (or 1 %) ...
 AREA_TOL = 0.06     # ... its surface area to within 6 % ...
 VOLUME_TOL = 0.05   # ... and its volume to within 5 %
+BODY_REAR_MM = -356.0  # back face of the body (CAD y); the tether runs out behind it
+TETHER_MM = 100.0      # a piece reaching this far behind the body is the tether
 
 STL_RECORD = np.dtype([('n', '<f4', 3), ('v', '<f4', (3, 3)), ('a', '<u2')])
 BOX_FACES = np.array([[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
@@ -219,10 +225,19 @@ def simplify_piece(verts, faces):
     return verts, faces
 
 
-def simplify_part(tris):
+def is_tether(verts):
+    """The tether is the only piece that sticks out far behind the body."""
+    return verts[:, 1].min() < BODY_REAR_MM - TETHER_MM
+
+
+def simplify_part(tris, keep_tether=False):
     verts, faces = indexed_mesh(tris)
     out_v, out_f, offset, pieces = [], [], 0, 0
     for v, f in split_pieces(verts, faces):
+        if not keep_tether and is_tether(v):
+            print('    left out the tether: %d triangles, %.0f mm long behind the body'
+                  % (len(f), BODY_REAR_MM - v[:, 1].min()))
+            continue
         v, f = simplify_piece(v, f)
         out_v.append(v)
         out_f.append(f + offset)
@@ -258,6 +273,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('input', help='the CAD export, e.g. "AGOS V1.stl" (.stl or .stl.gz)')
     ap.add_argument('-o', '--output-dir', default=os.path.join(here, '..', 'meshes'))
+    ap.add_argument('--keep-tether', action='store_true',
+                    help='keep the tether tube that runs out of the back of the robot')
     ap.add_argument('--list-colours', action='store_true',
                     help='only print the colours in the file and which part uses each')
     args = ap.parse_args()
@@ -272,7 +289,7 @@ def main():
     for name, colours in PARTS.items():
         mask = np.isin(attr, colours)
         used |= mask
-        verts, faces, pieces = simplify_part(tris[mask])
+        verts, faces, pieces = simplify_part(tris[mask], args.keep_tether)
         out = os.path.join(args.output_dir, 'agos_%s.stl' % name)
         written = write_stl(out, cad_to_urdf(verts), faces,
                             'AGOS %s (metres, +x forward) from tools/convert_robot_stl.py' % name)

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generate the concrete textures used by the pipe worlds.
+"""
+Generate the concrete textures used by the pipe worlds.
 
 Writes four images into materials/textures/:
   pipe_concrete.jpg           colour of the pipe's inside (and outside)
@@ -42,7 +43,8 @@ JOINT = np.array([0.16, 0.15, 0.13])
 
 
 def fbm(rng, shape, beta, lowest=1):
-    """Tileable fractal noise (mean 0, std 1): white noise shaped by 1/f^beta.
+    """
+    Tileable fractal noise (mean 0, std 1): white noise shaped by 1/f^beta.
 
     lowest: drop wavelengths longer than shape/lowest (keeps big blotches out
     of fine detail layers).
@@ -187,8 +189,8 @@ def chamber_texture(rng, shape):
 def save_rgb(path, rgb, quality):
     img = Image.fromarray((rgb * 255 + 0.5).astype(np.uint8), 'RGB')
     img.save(path, quality=quality, subsampling=0 if quality >= 90 else 2, optimize=True)
-    print('wrote %s (%dx%d, %.1f MB)' % (os.path.normpath(path), img.width, img.height,
-                                        os.path.getsize(path) / 1e6))
+    size = os.path.getsize(path) / 1e6
+    print('wrote %s (%dx%d, %.1f MB)' % (os.path.normpath(path), img.width, img.height, size))
 
 
 def main():

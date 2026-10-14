@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Rebuild the robot meshes (meshes/agos_*.stl) from the CAD export.
+"""
+Rebuild the robot meshes (meshes/agos_*.stl) from the CAD export.
 
 The input is Designs/STL/AGOS V1.stl: a binary STL from Fusion, in mm, with the
 robot facing +y and a colour stored on every triangle (the "COLOR=" convention:
@@ -133,7 +134,8 @@ def outward(verts, faces):
 
 
 def bounding_box(verts, faces):
-    """Tightest of the CAD-aligned and the principal-axis box around a piece.
+    """
+    Tightest of the CAD-aligned and the principal-axis box around a piece.
 
     Returns centre, axes (rows, shortest side first) and half sizes.
     """
@@ -226,7 +228,7 @@ def simplify_piece(verts, faces):
 
 
 def is_tether(verts):
-    """The tether is the only piece that sticks out far behind the body."""
+    """Tell whether a piece is the tether (the only one far behind the body)."""
     return verts[:, 1].min() < BODY_REAR_MM - TETHER_MM
 
 

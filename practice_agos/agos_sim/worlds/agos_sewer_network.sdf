@@ -1,0 +1,156 @@
+<?xml version="1.0"?>
+<sdf version="1.10">
+  <world name="agos_sewer_network">
+
+    <!-- 2 ms physics steps: half the work of the 1 ms the smaller worlds use,
+         and the tracks still drive the same (checked on every bend in this
+         network). /clock, and every ROS node listening to it, runs at
+         500 Hz instead of 1000 Hz. -->
+    <physics name="2ms" type="ignored">
+      <max_step_size>0.002</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <gravity>0 0 -9.8</gravity>
+
+    <!-- No shadows: inside a pipe they add nothing, and every camera (the
+         Gazebo window and the robot's RGB-D camera) would otherwise render
+         the scene a second time each frame to work them out. Ambient light
+         is what lights the inside of the pipes; the robot carries a front
+         headlight. -->
+    <scene>
+      <ambient>0.5 0.5 0.5 1</ambient>
+      <background>0.7 0.8 0.9 1</background>
+      <shadows>false</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>false</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+          <material>
+            <ambient>0.6 0.6 0.6 1</ambient>
+            <diffuse>0.6 0.6 0.6 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Sewer network: 248 m of 900 mm concrete pipe between five manhole
+         chambers (2.4 x 2.4 m inside, 1.8 m high, open access shaft in the
+         roof). North is +y.
+
+           M5 ~~wiggle~~ step _/~dogleg M1 ~S-curve~ zig-zag ===== M2 =hairpin
+           | `zig-zag spur                                          |
+           |                                                  serpentine
+           |                                                        |
+           `=========== gentle S ======== M4 ~sweeping curves~ M3 -135 deg spur
+                                          `45 deg spur
+
+           M1 (0, 0)          start: robot spawns here facing M2 (+x)
+           M2 (41.1, -0.8)    49.5 m of pipe from M1
+           M3 (36.4, -20.8)   28.2 m from M2
+           M4 (-2.2, -18.9)   38.4 m from M3
+           M5 (-41.1, -3.5)   44.8 m from M1, 52.4 m from M4
+
+         M1 sits on a straight line of pipe, like most manholes, with about
+         50 m of twisting pipe either side, so the proposal's mission fits:
+         explore 25 m one way, reverse back, turn round in the manhole,
+         explore 25 m the other way, come back. The manholes are the only
+         places the robot can turn round; in the pipes it drives forwards or
+         backwards. Pipes only meet in manholes.
+         The bottom inside the pipes is at z = 0.1 (the pipes rest on the
+         ground); the chamber floors are 24 mm higher, level with where the
+         tracks touch the pipe, with benching up to each pipe opening.
+         Regenerate the meshes with tools/make_pipe_mesh.py (layout
+         "network") and the textures with tools/make_pipe_texture.py. -->
+    <model name="agos_sewer_network">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="link">
+        <!-- the collision mesh is the bore only, with fewer facets than the
+             visual mesh: the robot only ever touches the inside -->
+        <collision name="pipes_collision">
+          <geometry>
+            <mesh><uri>model://agos_sim/meshes/agos_network_pipes.stl</uri></mesh>
+          </geometry>
+          <surface>
+            <friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="pipes_visual">
+          <geometry>
+            <mesh><uri>model://agos_sim/meshes/agos_network_pipes.obj</uri></mesh>
+          </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+            <pbr>
+              <metal>
+                <albedo_map>model://agos_sim/materials/textures/pipe_concrete.jpg</albedo_map>
+                <normal_map>model://agos_sim/materials/textures/pipe_concrete_normal.jpg</normal_map>
+                <roughness>0.9</roughness>
+                <metalness>0.0</metalness>
+              </metal>
+            </pbr>
+          </material>
+        </visual>
+        <collision name="chambers_collision">
+          <geometry>
+            <mesh><uri>model://agos_sim/meshes/agos_network_chambers.stl</uri></mesh>
+          </geometry>
+          <surface>
+            <friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="chambers_visual">
+          <geometry>
+            <mesh><uri>model://agos_sim/meshes/agos_network_chambers.obj</uri></mesh>
+          </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+            <pbr>
+              <metal>
+                <albedo_map>model://agos_sim/materials/textures/chamber_concrete.jpg</albedo_map>
+                <normal_map>model://agos_sim/materials/textures/chamber_concrete_normal.jpg</normal_map>
+                <roughness>0.9</roughness>
+                <metalness>0.0</metalness>
+              </metal>
+            </pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

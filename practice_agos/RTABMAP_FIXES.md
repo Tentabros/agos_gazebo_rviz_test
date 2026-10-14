@@ -1,5 +1,9 @@
 # RTAB-Map + Nav2 simulation fixes (practice_agos/agos_sim)
 
+> **Update (network round):** `./agos start` now replaces the terminals in
+> "How to run" below, and the default world is the larger network. See
+> `NETWORK_NAV_EXPLORE.md`.
+
 All changes are in `practice_agos/agos_sim`. They were traced from the code and
 checked for syntax (Python compiles, XML/YAML parse), but not run in ROS, so
 please do the quick checks at the end after rebuilding.
@@ -108,16 +112,18 @@ and `rtabmap_viz` so they always agree.
 
 | Parameter | Value | Why |
 |---|---|---|
-| `approx_sync` | `true` | RTAB-Map needs RGB + depth + scan + odom together. The camera runs at 15 Hz, the LiDAR at 10 Hz and odom at 50 Hz, so their timestamps never match exactly. Approximate sync pairs the closest ones. Without it, matched sets are rare and the map barely updates. |
-| `sync_queue_size` / `topic_queue_size` | `30` / `10` | Room to buffer the faster topics while waiting for the slower ones. |
+| `approx_sync` | `true` | RTAB-Map needs RGB + depth + scan + odom together. The camera (now 10 Hz, 15 Hz at first), the LiDAR (10 Hz) and odom (50 Hz) never share a timestamp exactly. Approximate sync pairs the closest ones. Without it, matched sets are rare and the map barely updates. |
+| `sync_queue_size` / `topic_queue_size` | `10` / `2` (were `30` / `10`) | Room to pair the camera with the LiDAR. The smaller queues (changed in the network round, see `NETWORK_NAV_EXPLORE.md`) keep RTAB-Map on the newest data. |
 | `odom_sensor_sync` | `true` | Corrects for odometry and sensor stamps being slightly apart. |
 | `Reg/Force3DoF` | `true` | AGOS is a ground robot, so it only moves in x, y and yaw. Without this, scan matching can add small z/roll/pitch errors that tilt the graph and make the 2D grid smear or duplicate obstacles. |
 | `Grid/Sensor` | `0` | Builds the occupancy grid from the LiDAR. Replaces the older `Grid/FromDepth: false`, which current RTAB-Map renamed. |
 | `Optimizer/GravitySigma` | `0` | No IMU constraints, since the robot is already locked to 2D. |
-| `Reg/Strategy`, `RGBD/NeighborLinkRefining`, `Grid/3D`, `Grid/RayTracing`, `Grid/RangeMax` | unchanged | These were already right. |
+| `odom_frame_id`, `odom_tf_linear_variance` / `odom_tf_angular_variance` | `odom`, `0.0002` / `0.00005` | Added in the network round. Odometry now comes from the `odom -> base_footprint` transform (the EKF) with a realistic uncertainty. Taken from `/odom`, it carried the EKF's variance of 1e-9, so RTAB-Map trusted it completely and rejected every loop closure. |
+| `RGBD/NeighborLinkRefining`, `RGBD/ProximityBySpace` | `false` (was `true` / default) | Changed in the network round. LiDAR ICP between neighbouring map nodes cannot tell how far the robot moved in a round pipe; in a test mission it turned the map 6.5 deg off. Loop closures (`Reg/Strategy` `1`: ICP on the LiDAR scan) still correct drift. |
+| `Reg/Strategy`, `Grid/3D`, `Grid/RayTracing`, `Grid/RangeMax` | unchanged | These were already right. |
 
 The `-d` argument is kept. It deletes `~/.ros/rtabmap.db` on every start, so each
-run begins with a fresh map.
+run begins with a fresh map (except with `localization:=true`, which reuses it).
 
 ## 5. Nav2 parameters for AGOS
 
@@ -211,8 +217,8 @@ won't grow the map.
 - **Box and sphere are dynamic.** If the robot bumps them they move or roll, and
   RTAB-Map will see ghosts. Add `<static>true</static>` if you want a fixed scene.
 - **Skid-steer odometry.** The DiffDrive plugin assumes no slip, but tracks slip
-  when turning, so `/odom` will over-report rotation. RTAB-Map's scan matching
-  corrects this between nodes. Spin slowly while mapping.
+  when turning, so wheel odometry alone over-reports rotation. The EKF takes the
+  heading from the IMU gyro, which does not slip. Spin slowly while mapping.
 - **Flat-coloured objects.** They give the camera few visual features for loop
   closure. Textured models would help once you move to a pipe/drain world.
 - **`DRIFT.md` says Jazzy + Harmonic**, but the build logs show `/opt/ros/lyrical`.

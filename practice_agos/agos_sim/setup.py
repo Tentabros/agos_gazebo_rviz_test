@@ -1,5 +1,6 @@
-import os
 from glob import glob
+import os
+
 from setuptools import find_packages, setup
 
 package_name = 'agos_sim'
@@ -28,7 +29,8 @@ setup(
     zip_safe=True,
     maintainer='Tentabros',
     maintainer_email='reuel.lichangco@gmail.com',
-    description='TODO: Package description',
+    description='AGOS sewer inspection robot simulation: Gazebo worlds, RTAB-Map SLAM, '
+                'Nav2 and TAD frontier exploration',
     license='Apache-2.0',
     extras_require={
         'test': [
@@ -37,6 +39,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'explorer = agos_sim.explorer:main',
+            'nav_supervisor = agos_sim.nav_supervisor:main',
         ],
     },
 )

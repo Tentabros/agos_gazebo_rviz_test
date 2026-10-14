@@ -1,5 +1,9 @@
 # Robot and pipe STL integration (practice_agos/agos_sim)
 
+> **Update (network round):** `./agos start` now replaces the terminals in
+> "How to run" below, and the default world is the larger network. See
+> `NETWORK_NAV_EXPLORE.md`.
+
 > **Update:** the pipes are now 900 mm, the default world is a larger sewer
 > network, the tether is gone and Nav2 is fixed for pipes. See
 > [PIPES_AND_NAV2.md](PIPES_AND_NAV2.md). Sections 1, 6 and 8 and "Things to

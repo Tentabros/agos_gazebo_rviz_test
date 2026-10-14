@@ -1,5 +1,9 @@
 # 900 mm pipes, sewer test network, pipe texture, tether, Nav2 goals
 
+> **Update (network round):** `./agos start` now replaces the terminals in
+> "How to run" below, and the default world is the larger network. See
+> `NETWORK_NAV_EXPLORE.md`.
+
 This round of changes covers your five requests. The robot is unchanged in
 size; everything else is sized around it.
 

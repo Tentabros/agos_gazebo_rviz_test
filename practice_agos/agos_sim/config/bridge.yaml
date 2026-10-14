@@ -56,11 +56,16 @@
   gz_type_name: "gz.msgs.Image"
   direction: GZ_TO_ROS
 
+# The 3D point cloud is only bridged while something on the ROS side
+# subscribes to it (lazy), and Gazebo only works it out while the bridge
+# listens. Nothing in the AGOS stack needs it (RTAB-Map uses the depth
+# image), so it costs nothing until you tick "Depth PointCloud" in RViz.
 - ros_topic_name: "/camera/depth/points"
   gz_topic_name: "/camera/points"
   ros_type_name: "sensor_msgs/msg/PointCloud2"
   gz_type_name: "gz.msgs.PointCloudPacked"
   direction: GZ_TO_ROS
+  lazy: true
 
 - ros_topic_name: "/camera/camera_info"
   gz_topic_name: "/camera/camera_info"

@@ -8,6 +8,9 @@
 #     direction of the goal arrow is ignored. It can turn in the manholes.
 #   - The pipe is only 0.9 m wide where the LiDAR sees it, so the stock 0.7 m
 #     obstacle padding (inflation) would fill the whole pipe.
+#   - Everything runs on one computer next to Gazebo, so the controller and
+#     the costmaps do less work per second than the stock settings (marked
+#     "lighter" below).
 
 bt_navigator:
   ros__parameters:
@@ -32,13 +35,22 @@ planner_server:
 
 controller_server:
   ros__parameters:
+    controller_frequency: 10.0       # lighter: stock 20 Hz; 0.3 m/s = 3 cm per cycle
     general_goal_checker:
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 3.15      # any heading: the robot may not be able to turn
+    progress_checker:
+      movement_time_allowance: 20.0  # stock 10 s; reversing out of a spur starts slowly
     FollowPath:                      # MPPI
       vx_max: 0.3                    # a sensible pipe-inspection speed
       vx_min: -0.3                   # reverse as fast as forwards
       wz_max: 1.0
+      # lighter: 1000 samples of 30 x 0.1 s (3 s ahead) instead of 2000 of
+      # 56 x 0.05 s. model_dt must match the controller period (10 Hz).
+      batch_size: 1000
+      time_steps: 30
+      model_dt: 0.1
+      visualize: false               # don't publish the sampled trajectories
       # Stock list minus GoalAngleCritic (turn to the goal arrow) and
       # PreferForwardCritic (turn round rather than reverse).
       critics: ["ConstraintCritic", "CostCritic", "GoalCritic",
@@ -52,20 +64,38 @@ local_costmap:
   local_costmap:
     ros__parameters:
       footprint: "[[0.356, 0.191], [0.356, -0.191], [-0.356, -0.191], [-0.356, 0.191]]"
+      # lighter: a flat 2D layer for the 2D LiDAR instead of the stock 3D
+      # voxel layer (16 layers of voxels for a sensor that only sees one)
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          data_type: "LaserScan"
+          marking: true
+          clearing: true
+          max_obstacle_height: 2.0
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
       keepout_filter:
         enabled: false
       inflation_layer:
         inflation_radius: 0.45
         cost_scaling_factor: 8.0
+      always_send_full_costmap: false   # lighter: send only the changed part
 
 global_costmap:
   global_costmap:
     ros__parameters:
       # By default the global costmap is exactly the size of the SLAM map, so
       # a goal in a pipe the robot hasn't seen yet is "outside bounds" and is
-      # refused. A 50 x 50 m window that follows the robot covers the whole
-      # sewer network from anywhere in it (40 m did not: the dead end is 22 m
-      # from manhole A); unseen parts count as free.
+      # refused. A 50 x 50 m window that follows the robot reaches 25 m in
+      # every direction (the length of one exploration leg); unseen parts
+      # count as free.
       rolling_window: true
       width: 50
       height: 50
@@ -77,6 +107,7 @@ global_costmap:
       inflation_layer:
         inflation_radius: 0.45
         cost_scaling_factor: 8.0
+      always_send_full_costmap: false   # lighter: send only the changed part
 
 velocity_smoother:
   ros__parameters:
@@ -84,3 +115,10 @@ velocity_smoother:
     min_velocity: [-0.3, 0.0, -1.0]
     max_accel: [1.0, 0.0, 2.0]
     max_decel: [-1.0, 0.0, -2.0]
+
+behavior_server:
+  ros__parameters:
+    # The explorer turns the robot round in a manhole with the spin
+    # behaviour; slow and steady on the tracks.
+    max_rotational_vel: 0.6
+    min_rotational_vel: 0.3

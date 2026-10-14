@@ -14,6 +14,13 @@
        The meshes in meshes/agos_*.stl are a simplified copy of that CAD file
        (see tools/convert_robot_stl.py). -->
 
+  <!-- RGB-D camera image size and rate (agos_sensors.xacro). The launch
+       files pass these on: camera_width:=640 camera_height:=480
+       camera_rate:=15 gives the old, sharper but slower camera. -->
+  <xacro:arg name="camera_width" default="320"/>
+  <xacro:arg name="camera_height" default="240"/>
+  <xacro:arg name="camera_rate" default="10"/>
+
   <!-- Track / wheels -->
   <xacro:property name="ground_to_base"   value="0.178"/>   <!-- ground -> base_link -->
   <xacro:property name="track_y"          value="0.1436"/>  <!-- track centre, either side -->

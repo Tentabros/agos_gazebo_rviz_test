@@ -3,7 +3,10 @@
 <package format="3">
   <name>agos_sim</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>
+    AGOS sewer inspection robot simulation: the robot model, Gazebo sewer
+    worlds, RTAB-Map SLAM, Nav2 and autonomous TAD frontier exploration.
+  </description>
   <maintainer email="reuel.lichangco@gmail.com">Tentabros</maintainer>
   <license>Apache-2.0</license>
 
@@ -28,7 +31,35 @@
 
   <exec_depend>rtabmap_slam</exec_depend>
   <exec_depend>rtabmap_viz</exec_depend>
+
+  <!-- Nav2: slam_nav.launch.py starts these servers itself and takes the
+       stock parameters from nav2_bringup -->
   <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_mppi_controller</exec_depend>
+  <exec_depend>nav2_smoother</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_smac_planner</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_waypoint_follower</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_rviz_plugins</exec_depend>
+
+  <!-- explorer and nav_supervisor -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>tf2_ros_py</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <!-- agos teleop -->
+  <exec_depend>teleop_twist_keyboard</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

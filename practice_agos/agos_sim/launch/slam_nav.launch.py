@@ -1,18 +1,40 @@
+"""
+RTAB-Map SLAM and Nav2 for AGOS.
+
+Run it after sim.launch.py, which provides /clock, the sensors, odometry and
+TF (or run agos.launch.py, which starts both):
+
+    ros2 launch agos_sim slam_nav.launch.py
+    ros2 launch agos_sim slam_nav.launch.py localization:=true
+
+Nav2 is started here node by node instead of through nav2_bringup's
+navigation_launch.py, so the lifecycle manager's list is exactly the nodes
+that run, and the velocity commands take one fixed route to the robot:
+
+    controller_server  -> /cmd_vel_nav -> velocity_smoother -> /cmd_vel -> Gazebo
+    behavior_server    -> /cmd_vel_nav -'
+
+navigation_launch.py puts collision_monitor between velocity_smoother and
+/cmd_vel. Whenever collision_monitor was not active (it is not in the node
+list from the Fix NAV notes) nothing reached /cmd_vel, which is why the
+topic_tools relay from /cmd_vel_nav to /cmd_vel made the robot move. It is
+left out here; the costmaps already keep the robot off the walls.
+
+Nav2 starts once RTAB-Map publishes the map -> odom transform (see
+nav_supervisor.py), instead of after a fixed 5 s delay.
+"""
 import os
 import tempfile
 import xml.etree.ElementTree as ET
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            OpaqueFunction, TimerAction)
+from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
-
-# Run this AFTER sim.launch.py is up (it provides /clock, sensors, odom and TF).
+from launch_ros.actions import Node, SetParameter
+from launch_ros.parameter_descriptions import ParameterFile
+import yaml
 
 # Camera topics as named in config/bridge.yaml
 RTABMAP_REMAPPINGS = [
@@ -20,30 +42,71 @@ RTABMAP_REMAPPINGS = [
     ('rgb/camera_info', '/camera/camera_info'),
     ('depth/image', '/camera/depth/image_raw'),
     ('scan', '/scan'),
-    ('odom', '/odom'),
 ]
 
 RTABMAP_PARAMS = {
     'frame_id': 'base_footprint',
-    'use_sim_time': True,
     'subscribe_depth': True,
     'subscribe_scan': True,
-    # Camera (15 Hz), LiDAR (10 Hz) and odom (50 Hz) never share a timestamp,
-    # so they must be matched approximately or rtabmap never gets a full set.
+    # Odometry from the odom -> base_footprint TF (the EKF: track speed and
+    # gyro turn rate), trusted this much for each step between map nodes.
+    # Not from the /odom topic: the EKF gives its speed a variance of 1e-9,
+    # which makes RTAB-Map so sure of the odometry that it rejects every loop
+    # closure ("Rejecting all added loop closures ... graph error ratio") and
+    # never corrects the drift.
+    'odom_frame_id': 'odom',
+    'odom_tf_linear_variance': 0.0002,     # (1.4 cm)^2 per step: track slip
+    'odom_tf_angular_variance': 0.00005,   # (0.4 deg)^2 per step: the gyro is good
+    # Camera (10 Hz) and LiDAR (10 Hz) never share a timestamp, so they must
+    # be matched approximately or rtabmap never gets a full set.
     'approx_sync': True,
-    'sync_queue_size': 30,
-    'topic_queue_size': 10,
+    'sync_queue_size': 10,
+    'topic_queue_size': 2,
     'odom_sensor_sync': True,
     # RTAB-Map's own parameters must be strings
-    'Reg/Strategy': '1',               # ICP on the LiDAR scan
+    'Reg/Strategy': '1',               # loop closures: ICP on the LiDAR scan
     'Reg/Force3DoF': 'true',           # ground robot: x, y, yaw only
-    'RGBD/NeighborLinkRefining': 'true',
+    # No LiDAR ICP between neighbouring map nodes or nodes close in space:
+    # in a round pipe ICP cannot tell how far the robot moved along a
+    # straight or round a bend, and in a test mission it turned the map 6.5
+    # deg off while the gyro heading was right to 0.1 deg. Drift is corrected
+    # by loop closures when the robot comes back past places it has seen.
+    'RGBD/NeighborLinkRefining': 'false',
+    'RGBD/ProximityBySpace': 'false',
     'Grid/Sensor': '0',                # occupancy grid from the LiDAR (was Grid/FromDepth)
     'Grid/3D': 'false',
     'Grid/RayTracing': 'true',
     'Grid/RangeMax': '10.0',
     'Optimizer/GravitySigma': '0',     # no IMU constraints, we are already 2D
 }
+
+# Mapping: start a new map every time (the old database is deleted).
+MAPPING_PARAMS = {
+    'Mem/IncrementalMemory': 'true',
+    'Mem/InitWMWithAllNodes': 'false',
+}
+
+# Localization: load the map saved by the last mapping run and only work
+# out where the robot is in it. RViz's "2D Pose Estimate" works in this
+# mode (in mapping mode RTAB-Map ignores it and says so in the terminal).
+LOCALIZATION_PARAMS = {
+    'Mem/IncrementalMemory': 'false',
+    'Mem/InitWMWithAllNodes': 'true',
+}
+
+# The Nav2 servers this launch file starts, in start-up order. This is the
+# list the lifecycle manager configures and activates.
+NAV2_NODES = [
+    # (package, executable, remappings)
+    ('nav2_controller', 'controller_server', [('cmd_vel', 'cmd_vel_nav')]),
+    ('nav2_smoother', 'smoother_server', []),
+    ('nav2_planner', 'planner_server', []),
+    ('nav2_behaviors', 'behavior_server', [('cmd_vel', 'cmd_vel_nav')]),
+    ('nav2_bt_navigator', 'bt_navigator', []),
+    ('nav2_waypoint_follower', 'waypoint_follower', []),
+    ('nav2_velocity_smoother', 'velocity_smoother',
+     [('cmd_vel', 'cmd_vel_nav'), ('cmd_vel_smoothed', 'cmd_vel')]),
+]
 
 
 def _merge(base, extra):
@@ -56,7 +119,8 @@ def _merge(base, extra):
 
 
 def _bt_without_spin(name):
-    """Copy one of Nav2's stock behaviour trees without its Spin recovery.
+    """
+    Copy one of Nav2's stock behaviour trees without its Spin recovery.
 
     Spinning on the spot is fine in a room but not in a pipe: the tracks climb
     the curved wall. The other recoveries (clear costmaps, wait, back up) stay.
@@ -77,9 +141,11 @@ def _bt_without_spin(name):
     return out
 
 
-def _write_nav2_params(nav2_bringup_dir):
+def _write_nav2_params():
     """Nav2's stock params with config/nav2_agos.yaml merged over them."""
-    with open(os.path.join(nav2_bringup_dir, 'params', 'nav2_params.yaml'), 'r') as f:
+    stock = os.path.join(get_package_share_directory('nav2_bringup'),
+                         'params', 'nav2_params.yaml')
+    with open(stock, 'r') as f:
         params = yaml.safe_load(f)
     agos = os.path.join(get_package_share_directory('agos_sim'), 'config', 'nav2_agos.yaml')
     with open(agos, 'r') as f:
@@ -113,59 +179,115 @@ def _write_nav2_params(nav2_bringup_dir):
     return out
 
 
-def _launch_nav2(context, *args, **kwargs):
-    nav2_bringup_dir = get_package_share_directory('nav2_bringup')
-    # navigation_launch.py = planner, controller, behaviors, BT navigator...
-    # It does NOT start map_server or AMCL: RTAB-Map already provides
-    # /map and the map -> odom transform.
-    nav2 = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(nav2_bringup_dir, 'launch', 'navigation_launch.py')),
-        launch_arguments={
-            'use_sim_time': 'true',
-            'autostart': 'true',
-            'params_file': _write_nav2_params(nav2_bringup_dir),
-        }.items()
-    )
-    # Give RTAB-Map a few seconds to start publishing map -> odom first,
-    # otherwise the costmaps sit waiting for that transform during activation.
-    return [TimerAction(period=5.0, actions=[nav2])]
+def _true(context, name):
+    return LaunchConfiguration(name).perform(context).lower() in ('true', '1', 'yes')
 
 
-def generate_launch_description():
-    args = [
-        DeclareLaunchArgument('nav2', default_value='true',
-                              description='Start Nav2 on top of RTAB-Map'),
-        DeclareLaunchArgument('rtabmap_viz', default_value='true',
-                              description='Start the RTAB-Map visualizer'),
-    ]
+def _launch_setup(context, *args, **kwargs):
+    localization = _true(context, 'localization')
+    log_level = LaunchConfiguration('log_level')
+    rtabmap_params = dict(RTABMAP_PARAMS)
+    rtabmap_params.update(LOCALIZATION_PARAMS if localization else MAPPING_PARAMS)
+    database = LaunchConfiguration('database_path').perform(context)
+    if database:
+        rtabmap_params['database_path'] = os.path.expanduser(database)
 
     # 1. RTAB-Map SLAM node (publishes /map and map -> odom)
     rtabmap_slam = Node(
         package='rtabmap_slam',
         executable='rtabmap',
         output='screen',
-        parameters=[RTABMAP_PARAMS],
+        parameters=[rtabmap_params],
         remappings=RTABMAP_REMAPPINGS,
-        arguments=['-d']   # delete the previous database (~/.ros/rtabmap.db) on start
+        # mapping: delete the previous database (~/.ros/rtabmap.db) on start
+        arguments=([] if localization else ['-d'])
+        + ['--ros-args', '--log-level', log_level],
+        # on Ctrl+C it saves the map to the database: give it time
+        sigterm_timeout='30',
     )
 
-    # 2. RTAB-Map visualizer (same inputs as the SLAM node)
+    # 2. RTAB-Map's own window (same inputs as the SLAM node). Off by
+    # default: it draws the full 3D point cloud map, and RViz already shows
+    # the map, the robot and the camera.
     rtabmap_viz = Node(
         package='rtabmap_viz',
         executable='rtabmap_viz',
         output='screen',
-        parameters=[RTABMAP_PARAMS],
+        parameters=[rtabmap_params],
         remappings=RTABMAP_REMAPPINGS,
         condition=IfCondition(LaunchConfiguration('rtabmap_viz')),
     )
 
-    # 3. Nav2 navigation stack only (lifecycle_manager_navigation)
-    nav2 = OpaqueFunction(function=_launch_nav2,
-                          condition=IfCondition(LaunchConfiguration('nav2')))
+    actions = [rtabmap_slam, rtabmap_viz]
+    if not _true(context, 'nav2'):
+        return [GroupAction([SetParameter('use_sim_time', LaunchConfiguration('use_sim_time'))]
+                            + actions)]
 
-    return LaunchDescription(args + [
-        rtabmap_slam,
-        rtabmap_viz,
-        nav2,
-    ])
+    # 3. Nav2 servers and their lifecycle manager. allow_substs: the stock
+    # params contain $(find-pkg-share ...) paths (bt_navigator's behaviour
+    # tree folder), which launch fills in.
+    params_file = ParameterFile(_write_nav2_params(), allow_substs=True)
+    for package, executable, remappings in NAV2_NODES:
+        actions.append(Node(
+            package=package,
+            executable=executable,
+            name=executable,
+            output='screen',
+            respawn=False,
+            parameters=[params_file],
+            arguments=['--ros-args', '--log-level', log_level],
+            remappings=remappings,
+        ))
+    actions.append(Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_navigation',
+        output='screen',
+        arguments=['--ros-args', '--log-level', log_level],
+        parameters=[{
+            # nav_supervisor (or the Startup button in RViz's Navigation 2
+            # panel when autostart:=false) starts Nav2 once the map exists
+            'autostart': False,
+            'node_names': [executable for _, executable, _ in NAV2_NODES],
+            # A busy computer can miss the stock 4 s heartbeat, which makes the
+            # lifecycle manager shut every Nav2 node down. Allow 10 s.
+            'bond_timeout': 10.0,
+        }],
+    ))
+
+    # 4. Starts Nav2 when RTAB-Map is ready, restarts it if it goes down. It
+    #    runs on the wall clock: following /clock (500 messages a second)
+    #    would cost this Python node a sixth of a CPU core, and its 1-5 s
+    #    checks do not need simulation time.
+    actions.append(Node(
+        package='agos_sim',
+        executable='nav_supervisor',
+        output='screen',
+        parameters=[{'use_sim_time': False}],
+        condition=IfCondition(LaunchConfiguration('autostart')),
+    ))
+
+    return [GroupAction([SetParameter('use_sim_time', LaunchConfiguration('use_sim_time'))]
+                        + actions)]
+
+
+def generate_launch_description():
+    args = [
+        DeclareLaunchArgument('use_sim_time', default_value='true',
+                              description='Use the Gazebo clock (/clock)'),
+        DeclareLaunchArgument('nav2', default_value='true',
+                              description='Start Nav2 on top of RTAB-Map'),
+        DeclareLaunchArgument('autostart', default_value='true',
+                              description='Start Nav2 by itself as soon as RTAB-Map has a map. '
+                                          "false = press Startup in RViz's Navigation 2 panel"),
+        DeclareLaunchArgument('localization', default_value='false',
+                              description='false = build a new map (deletes the old one). '
+                                          'true = reuse the last map and only localize in it'),
+        DeclareLaunchArgument('database_path', default_value='~/.ros/rtabmap.db',
+                              description='Where RTAB-Map keeps its map'),
+        DeclareLaunchArgument('rtabmap_viz', default_value='false',
+                              description="Also open RTAB-Map's own window (heavy)"),
+        DeclareLaunchArgument('log_level', default_value='info',
+                              description='Log level of RTAB-Map and the Nav2 nodes'),
+    ]
+    return LaunchDescription(args + [OpaqueFunction(function=_launch_setup)])

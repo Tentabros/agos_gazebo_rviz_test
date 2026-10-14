@@ -74,8 +74,14 @@
       <child_frame_id>base_footprint</child_frame_id>
       <odom_publish_frequency>50</odom_publish_frequency>
     </plugin>
+    <!-- Wheel angles for robot_state_publisher. Without update_rate this
+         publishes on every physics step (500-1000 times a second), and each
+         message becomes 12 wheel transforms on /tf that every ROS node
+         listening to /tf has to process. 20 Hz is plenty: the wheels have no
+         visual of their own. -->
     <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
       <topic>joint_states</topic>
+      <update_rate>20</update_rate>
     </plugin>
   </gazebo>
 

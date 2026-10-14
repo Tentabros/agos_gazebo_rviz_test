@@ -1,29 +1,40 @@
 #!/usr/bin/env python3
-"""Generate the pipe meshes used by the pipe worlds.
+"""
+Generate the pipe meshes used by the pipe worlds.
 
-Two layouts, both with a 900 mm bore (the sewer pipe size AGOS is built for):
+Three layouts, all with a 900 mm bore (the sewer pipe size AGOS is built for):
 
-  cad    -> meshes/agos_pipe.{obj,stl}, used by worlds/agos_pipe.sdf
-            The pipe in Designs/STL/PipeDesign_AGOS.stl, scaled up 2.25x so
-            its 400 mm bore becomes 900 mm: same shape, same open ends, the
-            straights 2.25x longer and the bends 1.37 m in radius.
-  sewer  -> meshes/agos_sewer_pipes.{obj,stl} and agos_sewer_chambers.{obj,stl},
-            used by worlds/agos_sewer.sdf (the default world)
-            A larger test network: four manhole chambers joined in a loop of
-            47 m of pipe (long straights, an S-bend made of two 45 deg
-            bends) plus a 10 m dead-end branch with a 90 deg bend.
+  network -> meshes/agos_network_pipes.{obj,stl} and agos_network_chambers.{obj,stl},
+             used by worlds/agos_sewer_network.sdf (the default world)
+             A larger, twistier network: five manholes (M1-M5) in a 250 m loop
+             with sweeping curves, S-bends, a zig-zag, a serpentine, doglegs,
+             and four dead-end branches (a hairpin, a 135 deg bend, a 45 deg
+             bend and a zig-zag). The robot starts in M1 with 50 m of pipe
+             either side of it, so the proposal's mission (explore 25 m one way,
+             come back, turn round, explore 25 m the other way) fits.
+  sewer   -> meshes/agos_sewer_pipes.{obj,stl} and agos_sewer_chambers.{obj,stl},
+             used by worlds/agos_sewer.sdf
+             The smaller network: four manhole chambers joined in a loop of
+             47 m of pipe (long straights, an S-bend made of two 45 deg
+             bends) plus a 10 m dead-end branch with a 90 deg bend.
+  cad     -> meshes/agos_pipe.{obj,stl}, used by worlds/agos_pipe.sdf
+             The pipe in Designs/STL/PipeDesign_AGOS.stl, scaled up 2.25x so
+             its 400 mm bore becomes 900 mm: same shape, same open ends, the
+             straights 2.25x longer and the bends 1.37 m in radius.
 
 The .obj files are what Gazebo draws. They carry texture coordinates for the
 images from tools/make_pipe_texture.py: once around the pipe across the image
 (bottom of the pipe = middle of the image) and TEXTURE_LENGTH_M of pipe down
-it. The .stl files are the same shapes for collisions.
+it. The .stl files are for collisions: for the pipes only the bore (the robot
+is always inside), with fewer facets around it, which keeps the physics fast.
 
 Coordinates are metres. z = 0 is the ground: the pipes rest on it, so the
 bottom inside the pipe (the invert) is at z = WALL and the pipe axis at
 z = WALL + BORE / 2.
 
 Only needs numpy:
-    python3 tools/make_pipe_mesh.py              # both layouts
+    python3 tools/make_pipe_mesh.py              # all layouts
+    python3 tools/make_pipe_mesh.py --layout network
     python3 tools/make_pipe_mesh.py --layout cad --bore 1.0
 Then rebuild (colcon build) so the new meshes are installed. If you change
 --bore or --wall, check spawn_z in launch/sim.launch.py (about WALL + 0.04).
@@ -53,16 +64,23 @@ SHAFT_DIAMETER = 0.7
 # bottom of a 900 mm pipe, so the robot rolls from pipe to chamber without
 # a step. With the floor at the invert, the tracks hit a 30 mm lip.
 FLOOR_LIFT = 0.024
-# In front of each pipe the floor is shaped like the pipe (benching): it rises
-# at the sides, up to BENCH_HEIGHT, and flattens out BENCH_LENGTH into the
-# chamber. A robot that arrives off-centre rides up the side and slides back
-# to the middle instead of hitting the edge of the opening.
+# In front of each pipe the floor is shaped like the pipe for BENCH_LENGTH into
+# the chamber: benching rises at the sides, up to BENCH_HEIGHT, and a shallow
+# channel continues the bottom of the pipe in the middle (like the channel in
+# a real manhole floor), both flattening out into the chamber floor. A robot
+# that arrives off-centre rides up the side and slides back to the middle
+# instead of hitting the edge of the opening, and one that reverses out of a
+# pipe off-centre meets a ramp, not a 24 mm step its rear wheels cannot climb.
 BENCH_LENGTH = 0.6
 BENCH_HEIGHT = 0.2
 
-AROUND = 64             # segments around the pipe
-ARC_STEP_DEG = 3.0      # bend segment angle
-LINE_STEP = 0.6         # straight segment length (short triangles collide more reliably)
+AROUND = 64             # segments around the bore in the visual mesh (what the camera sees)
+AROUND_OUTSIDE = 24     # segments around the outside of the pipe (only seen from above)
+AROUND_COLLISION = 32   # segments around the bore in the collision mesh
+ARC_STEP_DEG = 3.0      # collision mesh: bend segment angle
+LINE_STEP = 0.6         # collision mesh: straight segment length (short triangles collide better)
+VISUAL_ARC_STEP_DEG = 6.0   # visual mesh: bend segment angle (smooth shading hides the facets)
+VISUAL_LINE_STEP = 2.4  # visual mesh: straight segment length (straights look the same)
 
 
 # ---------------------------------------------------------------- mesh builder
@@ -149,7 +167,8 @@ def drop_degenerate(v, f):
 # ---------------------------------------------------------------- pipe runs
 
 class Run:
-    """A pipe centreline on the ground plane, built like a turtle.
+    """
+    A pipe centreline on the ground plane, built like a turtle.
 
     start: (x, y) of the run's start; heading: degrees, 0 = +x, 90 = +y.
     Then .straight(length) and .bend(degrees, radius) (positive = left).
@@ -185,16 +204,16 @@ class Run:
     def length(self):
         return sum(s[3] for s in self.segments)
 
-    def samples(self):
+    def samples(self, line_step=LINE_STEP, arc_step_deg=ARC_STEP_DEG):
         """Arc length, points and unit tangents along the centreline."""
         out_s, out_p, out_t, s0 = [], [], [], 0.0
         for kind, p0, h0, length, radius, sign in self.segments:
             if kind == 'line':
-                steps = np.linspace(0.0, length, max(2, int(np.ceil(length / LINE_STEP)) + 1))
+                steps = np.linspace(0.0, length, max(2, int(np.ceil(length / line_step)) + 1))
                 heading = np.full(len(steps), h0)
                 pts = p0 + steps[:, None] * np.array([np.cos(h0), np.sin(h0)])
             else:
-                n = max(2, int(np.ceil(np.degrees(length / radius) / ARC_STEP_DEG)) + 1)
+                n = max(2, int(np.ceil(np.degrees(length / radius) / arc_step_deg)) + 1)
                 steps = np.linspace(0.0, length, n)
                 heading = h0 + sign * steps / radius
                 centre = p0 + radius * sign * np.array([-np.sin(h0), np.cos(h0)])
@@ -208,23 +227,39 @@ class Run:
         return np.concatenate(out_s), np.concatenate(out_p), np.concatenate(out_t)
 
 
-def add_run(mesh, run, bore, wall):
-    """Inside and outside surface of a run, plus flat end walls where capped."""
-    s, pts, tans = run.samples()
+def add_run(mesh, run, bore, wall, collision=False):
+    """
+    One pipe run.
+
+    Visual: the bore (inside surface), the outside surface, and flat end walls
+    where capped or a rim where the pipe ends in the open.
+    Collision: the bore only, with fewer facets around it but short ones along
+    it, plus the inside of the end walls.
+    """
+    if collision:
+        s, pts, tans = run.samples(LINE_STEP, ARC_STEP_DEG)
+    else:
+        s, pts, tans = run.samples(VISUAL_LINE_STEP, VISUAL_ARC_STEP_DEG)
     r_in, r_out = bore / 2.0, bore / 2.0 + wall
     axis_z = wall + r_in
-    # angle from the crown: 0 = top, pi = bottom (texture u = 0.5)
-    phi = np.linspace(0.0, 2 * np.pi, AROUND + 1)
     side = np.c_[tans[:, 1], -tans[:, 0], np.zeros(len(tans))]   # right of travel
     up = np.array([0.0, 0.0, 1.0])
-    radial = (np.sin(phi)[None, :, None] * side[:, None, :]
-              + np.cos(phi)[None, :, None] * up[None, None, :])
     centre = np.c_[pts, np.full(len(pts), axis_z)]
-    u = np.broadcast_to(phi / (2 * np.pi), radial.shape[:2])
-    v = np.broadcast_to(((s + run.v_offset) / TEXTURE_LENGTH_M)[:, None], radial.shape[:2])
-    uv = np.dstack([u, v])
-    mesh.grid(centre[:, None, :] + r_in * radial, -radial, uv)      # bore, facing in
-    mesh.grid(centre[:, None, :] + r_out * radial, radial, uv)      # outside
+    v = (s + run.v_offset) / TEXTURE_LENGTH_M
+
+    def ring(n):
+        # angle from the crown: 0 = top, pi = bottom (texture u = 0.5)
+        phi = np.linspace(0.0, 2 * np.pi, n + 1)
+        radial = (np.sin(phi)[None, :, None] * side[:, None, :]
+                  + np.cos(phi)[None, :, None] * up[None, None, :])
+        uv = np.dstack(np.broadcast_arrays(phi[None, :] / (2 * np.pi), v[:, None]))
+        return radial, uv
+
+    radial, uv = ring(AROUND_COLLISION if collision else AROUND)
+    mesh.grid(centre[:, None, :] + r_in * radial, -radial, uv)          # bore, facing in
+    if not collision:
+        radial_out, uv_out = ring(AROUND_OUTSIDE)
+        mesh.grid(centre[:, None, :] + r_out * radial_out, radial_out, uv_out)   # outside
     for i, cap, sign in ((0, run.start_cap, -1.0), (-1, run.end_cap, 1.0)):
         normal = sign * np.r_[tans[i], 0.0]
         if cap:   # flat end wall: one face towards the bore, one outside
@@ -232,22 +267,27 @@ def add_run(mesh, run, bore, wall):
             disc_uv = np.dstack([rim @ side[i], rim[..., 2]]) / (np.pi * bore)
             disc = centre[i] + rim
             mesh.grid(disc - normal * wall, np.broadcast_to(-normal, disc.shape), disc_uv)
-            mesh.grid(disc, np.broadcast_to(normal, disc.shape), disc_uv)
-        elif not getattr(run, 'joined_%s' % ('start' if i == 0 else 'end'), False):
+            if not collision:
+                mesh.grid(disc, np.broadcast_to(normal, disc.shape), disc_uv)
+        elif not collision and not getattr(
+                run, 'joined_%s' % ('start' if i == 0 else 'end'), False):
             # open end: the ring between the bore and the outside
-            ring = centre[i] + np.stack([r_in * radial[i], r_out * radial[i]])
-            mesh.grid(ring, np.broadcast_to(normal, ring.shape), uv[[i, i]])
+            rim = centre[i] + np.stack([r_in * radial[i], r_out * radial[i]])
+            mesh.grid(rim, np.broadcast_to(normal, rim.shape), uv[[i, i]])
 
 
 # ---------------------------------------------------------------- chambers
 
 def wall_with_holes(width, height, holes, segments=AROUND):
-    """Triangulate a width x height rectangle (local a, b coords from its
-    lower-left corner) with circular holes [(a, b, r)]. The rectangle is cut
-    into vertical strips with at most one hole each; each strip is meshed by
-    rays from the hole centre to the strip outline, so the outline (corners
-    included) is exact. A hole may run past the bottom edge (b < 0): it is
-    then cut off by that edge. Returns points (N,2) and faces."""
+    """
+    Triangulate a width x height rectangle with circular holes [(a, b, r)].
+
+    a, b are local coordinates from the rectangle's lower-left corner. The
+    rectangle is cut into vertical strips with at most one hole each; each
+    strip is meshed by rays from the hole centre to the strip outline, so the
+    outline (corners included) is exact. A hole may run past the bottom edge
+    (b < 0): it is then cut off by that edge. Returns points (N,2) and faces.
+    """
     holes = sorted(holes)
     cuts = [0.0] + [(h1[0] + h1[2] + h2[0] - h2[2]) / 2 for h1, h2 in zip(holes, holes[1:])] \
         + [width]
@@ -313,15 +353,18 @@ class Chamber:
         self.holes = {d: [] for d in ('+x', '-x', '+y', '-y')}
 
     def face(self, direction):
-        """Middle of an inside wall at floor level, e.g. face('+x')."""
+        """Return the middle of an inside wall at floor level (direction '+x', '-y' ...)."""
         axis, sign = (0 if direction[1] == 'x' else 1), (1 if direction[0] == '+' else -1)
         p = self.c.copy()
         p[axis] += sign * CHAMBER_SIZE / 2
         return p
 
     def connect(self, run, at_start, direction, offset=0.0):
-        """Open a hole for a run that starts or ends at this chamber's wall,
-        and extend the run's bore through the wall."""
+        """
+        Open a hole for a run that starts or ends at this chamber's wall.
+
+        The run's bore is extended through the wall.
+        """
         self.holes[direction].append(offset)
         setattr(run, 'joined_%s' % ('start' if at_start else 'end'), True)
 
@@ -339,25 +382,33 @@ def smooth01(x):
 
 
 def add_floor(mesh, ch, floor, r_in, uv_scale, step=0.04):
-    """Chamber floor as a height field: flat, rising in front of each pipe
-    opening to meet the curved bottom of the pipe at the wall."""
+    """
+    Make the chamber floor as a height field.
+
+    Flat, and shaped like the bottom of the pipe in front of each opening, so
+    it meets the pipe exactly at the wall (benching at the sides, a shallow
+    channel in the middle).
+    """
     half = CHAMBER_SIZE / 2.0
     n = int(round(CHAMBER_SIZE / step)) + 1
     g = np.linspace(-half, half, n)
     x, y = np.meshgrid(g, g, indexing='ij')
     lift = np.zeros_like(x)
+    dip = np.zeros_like(x)
     for d, offsets in ch.holes.items():
         out_dir, a_dir = WALLS[d]
         dist = half - (x * out_dir[0] + y * out_dir[1])     # distance from the wall
+        into = smooth01(1.0 - dist / BENCH_LENGTH)          # 1 at the wall, 0 BENCH_LENGTH in
         for off in offsets:
             a = np.abs(x * a_dir[0] + y * a_dir[1] - off)   # sideways from the opening's middle
             ac = np.minimum(a, r_in)
             pipe = r_in - np.sqrt(r_in ** 2 - ac ** 2) - FLOOR_LIFT   # pipe bottom above the floor
             bump = np.clip(pipe, 0.0, BENCH_HEIGHT)
             bump *= 1.0 - smooth01((a - r_in) / 0.25)  # fade out beside the opening
-            bump *= smooth01(1.0 - dist / BENCH_LENGTH)               # flatten into the chamber
-            lift = np.maximum(lift, bump)
-    z = floor + lift
+            lift = np.maximum(lift, bump * into)
+            # channel: the middle of the pipe bottom is below the floor
+            dip = np.minimum(dip, np.minimum(pipe, 0.0) * into)
+    z = floor + lift + dip
     pts = np.dstack([ch.c[0] + x, ch.c[1] + y, z])
     gx, gy = np.gradient(z, g, g)
     nrm = np.dstack([-gx, -gy, np.ones_like(z)])
@@ -383,19 +434,6 @@ def add_chamber(mesh, ch, bore, wall):
         o_in = mid + half * out_dir - half * a_dir + floor * ez
         holes_in = [(half + off, r_in - FLOOR_LIFT, r_in) for off in ch.holes[d]]
         add_plane(mesh, o_in, a_dir, ez, -out_dir, CHAMBER_SIZE, CHAMBER_HEIGHT, holes_in, s)
-        # the small step face below the floor edge, seen from inside the pipe
-        for off in ch.holes[d]:
-            half_chord = np.sqrt(r_in ** 2 - (r_in - FLOOR_LIFT) ** 2)
-            ang = np.linspace(-np.arcsin(half_chord / r_in), np.arcsin(half_chord / r_in), 17)
-            a = off + r_in * np.sin(ang)
-            b = inv + r_in - r_in * np.cos(ang)
-            centre = mid + half * out_dir
-            pts = np.r_[[centre + off * a_dir + floor * ez],
-                        centre + a[:, None] * a_dir + b[:, None] * ez]
-            fan = np.c_[np.zeros(16, int), np.arange(1, 17), np.arange(2, 18)]
-            nrm = np.broadcast_to(out_dir, pts.shape)
-            uv = np.c_[pts @ a_dir, pts[:, 2]] / s
-            mesh.add(pts, nrm, uv, orient(pts, nrm, fan))
         # outside face: from the ground to the roof top, holes = pipe outsides
         o_out = mid + (half + t) * out_dir - (half + t) * a_dir
         holes_out = [(half + t + off, inv + r_in, r_out) for off in ch.holes[d]]
@@ -420,7 +458,8 @@ def add_chamber(mesh, ch, bore, wall):
 # ---------------------------------------------------------------- layouts
 
 def cad_layout():
-    """The CAD pipe's centreline (Designs/STL/PipeDesign_AGOS.stl), scaled.
+    """
+    Return the CAD pipe's centreline (Designs/STL/PipeDesign_AGOS.stl), scaled.
 
     The world origin is the middle of the longest straight, where the robot
     spawns facing +x. Both ends are open.
@@ -433,12 +472,13 @@ def cad_layout():
 
 
 def sewer_layout():
-    """A loop of four manholes (A, B, C, D) and a dead-end branch off B.
+    r"""
+    Return a loop of four manholes (A, B, C, D) and a dead-end branch off B.
 
             D ===== S-bend ===== C
             |                    |
             |                    |       N (+y)
-            A ================== B ==\\    |
+            A ================== B ==\    |
                                       ||   +-- E (+x)
                                       ==  (capped)
 
@@ -474,14 +514,172 @@ def sewer_layout():
     return runs, [a, b, c, d]
 
 
+# Headings of the four chamber walls, and turtle steps for the network layout:
+# ('S', length) is a straight, ('B', degrees, radius) a bend (positive = left).
+HEADINGS = {'+x': 0.0, '+y': 90.0, '-x': 180.0, '-y': 270.0}
+
+
+def run_from(chamber, direction, steps, v_offset=0.0):
+    """Make a run that leaves `chamber` square through its `direction` wall."""
+    run = Run(chamber.face(direction), HEADINGS[direction], v_offset)
+    for step in steps:
+        if step[0] == 'S':
+            run.straight(step[1])
+        else:
+            run.bend(step[1], step[2])
+    return run
+
+
+def chamber_at_end(run, direction):
+    """
+    Find the chamber whose `direction` wall is where `run` ends.
+
+    The run must arrive square to that wall, heading into the chamber.
+    """
+    heading = np.degrees(run.h) % 360.0
+    want = (HEADINGS[direction] + 180.0) % 360.0
+    if abs((heading - want + 180.0) % 360.0 - 180.0) > 1e-6:
+        raise SystemExit('layout error: run arrives heading %.1f deg, the %s wall needs %.1f'
+                         % (heading, direction, want))
+    out = np.radians(HEADINGS[direction])
+    centre = run.p - CHAMBER_SIZE / 2 * np.array([np.cos(out), np.sin(out)])
+    return Chamber(*centre)
+
+
+def solve_straights(c0, d0, c1, d1, steps):
+    """
+    Fill in the two straights given as ('S', None).
+
+    They are solved so that the run from c0's d0 wall ends at c1's d1 wall.
+    The two must not be parallel.
+    """
+    unknown = [i for i, step in enumerate(steps) if step[0] == 'S' and step[1] is None]
+    if len(unknown) != 2:
+        raise SystemExit('layout error: solve_straights needs exactly two unknown straights')
+
+    def end(lengths):
+        filled = list(steps)
+        for i, length in zip(unknown, lengths):
+            filled[i] = ('S', length)
+        return run_from(c0, d0, filled).p, filled
+
+    p0 = end([0.0, 0.0])[0]
+    a = np.c_[end([1.0, 0.0])[0] - p0, end([0.0, 1.0])[0] - p0]
+    lengths = np.linalg.solve(a, c1.face(d1) - p0)
+    if lengths.min() < 0.5:
+        raise SystemExit('layout error: solved straights %s are too short; move the chambers'
+                         % np.round(lengths, 2))
+    return end(lengths)[1]
+
+
+def network_layout():
+    """
+    Five manholes in a 250 m loop, with a dead-end branch at four of them.
+
+        M5 ~~~wiggle~~~ step _/~dogleg M1 ~S-curve~ zig-zag ======= M2 =hairpin
+        |  `zig-zag spur                                            |
+        |                                                   serpentine
+        |                                                           |
+        `========== gentle S ========= M4 ~~ sweeping curves ~~ M3 -135 deg spur
+                                       `45 deg spur
+
+    The robot starts in M1 at the origin, facing M2 (+x). M1 sits on a straight
+    line of pipe like most manholes: 49.5 m of twisty pipe east to M2 and
+    44.8 m west to M5, so it can explore 25 m each way (the proposal's
+    mission) without reaching the next manhole. Pipes only meet in manholes.
+    """
+    r = BEND_R
+    runs = []
+    v = [0.0]
+
+    def add(run):
+        run.v_offset = v[0]
+        v[0] += 7.3     # so neighbouring runs do not show the same stretch of texture
+        runs.append(run)
+        return run
+
+    def link(c0, d0, c1, d1, run):
+        c0.connect(run, True, d0)
+        c1.connect(run, False, d1)
+        add(run)
+
+    m1 = Chamber(0.0, 0.0)
+    # M1 -> M2: a long sweeping S-curve (R 6 m), a zig-zag of 30/60 deg bends,
+    # a straight, then 90 deg right into M2
+    east = run_from(m1, '+x', [
+        ('S', 3.0), ('B', 60, 6.0), ('S', 2.0), ('B', -60, 6.0), ('S', 3.0),
+        ('B', -30, r), ('S', 1.2), ('B', 60, r), ('S', 1.2), ('B', -60, r), ('S', 1.2),
+        ('B', 30, r), ('S', 14.0), ('B', -90, r), ('S', 5.0)])
+    m2 = chamber_at_end(east, '+y')
+    link(m1, '+x', m2, '+y', east)
+    # M2 -> M3: a serpentine of 90 deg bends heading south
+    south = run_from(m2, '-y', [
+        ('S', 2.0), ('B', -90, r), ('S', 2.0), ('B', 90, r), ('S', 2.0), ('B', 90, r),
+        ('S', 2.0), ('B', -90, r), ('S', 3.0), ('B', -90, r), ('S', 2.0), ('B', 90, r),
+        ('S', 2.5)])
+    m3 = chamber_at_end(south, '+y')
+    link(m2, '-y', m3, '+y', south)
+    # M3 -> M4: long sweeping curves (R 8 m), then a dogleg
+    southwest = run_from(m3, '-x', [
+        ('S', 2.0), ('B', 30, 8.0), ('S', 3.0), ('B', -60, 8.0), ('S', 3.0), ('B', 30, 8.0),
+        ('S', 6.0), ('B', -45, r), ('S', 1.5), ('B', 45, r), ('S', 4.0)])
+    m4 = chamber_at_end(southwest, '+x')
+    link(m3, '-x', m4, '+x', southwest)
+    # M1 -> M5: a dogleg, a step (90 left, 90 right), a gentle wiggle (R 8 m)
+    west = run_from(m1, '-x', [
+        ('S', 2.5), ('B', -45, r), ('S', 2.0), ('B', 45, r), ('S', 4.0),
+        ('B', 90, r), ('S', 3.0), ('B', -90, r), ('S', 3.0),
+        ('B', -25, 8.0), ('S', 2.0), ('B', 50, 8.0), ('S', 2.0), ('B', -25, 8.0), ('S', 6.0)])
+    m5 = chamber_at_end(west, '+x')
+    link(m1, '-x', m5, '+x', west)
+    # M4 -> M5 closes the loop: a gentle S (R 10 m), a long straight, then a
+    # wide 90 deg bend (R 4 m) north into M5. The two straights are solved.
+    steps = solve_straights(m4, '-x', m5, '-y', [
+        ('S', 3.0), ('B', 20, 10.0), ('S', 2.0), ('B', -20, 10.0), ('S', None),
+        ('B', -90, 4.0), ('S', None)])
+    link(m4, '-x', m5, '-y', run_from(m4, '-x', steps))
+
+    # dead-end branches, blanked off at the end
+    for ch, d, branch in ((m2, '+x', [('S', 3.0), ('B', -180, r), ('S', 1.5)]),
+                          (m3, '-y', [('S', 2.0), ('B', -135, r), ('S', 3.0)]),
+                          (m4, '-y', [('S', 2.5), ('B', 45, r), ('S', 4.0)]),
+                          (m5, '-x', [('S', 2.0), ('B', 30, r), ('S', 1.5), ('B', -60, r),
+                                      ('S', 1.5), ('B', 30, r), ('S', 2.0)])):
+        spur = run_from(ch, d, branch).capped(end=True)
+        ch.connect(spur, True, d)
+        add(spur)
+    check_clearance(runs, [m1, m2, m3, m4, m5])
+    return runs, [m1, m2, m3, m4, m5]
+
+
+def check_clearance(runs, chambers, gap=0.2):
+    """Stop if two pipes overlap or a pipe runs through a chamber."""
+    r_out = BORE / 2 + WALL
+    pts = [run.samples(0.3)[1] for run in runs]
+    for i in range(len(runs)):
+        for j in range(i + 1, len(runs)):
+            d = np.linalg.norm(pts[i][:, None] - pts[j][None], axis=2)
+            k = np.unravel_index(d.argmin(), d.shape)
+            in_chamber = min(np.abs(pts[i][k[0]] - ch.c).max() for ch in chambers)
+            if d.min() < 2 * r_out + gap and in_chamber > CHAMBER_SIZE / 2 + 1.0:
+                raise SystemExit('layout error: runs %d and %d come %.2f m apart at %s'
+                                 % (i, j, d.min(), np.round(pts[i][k[0]], 2)))
+    for i, p in enumerate(pts):
+        for ch in chambers:
+            if (np.abs(p - ch.c).max(axis=1) < CHAMBER_SIZE / 2 + r_out - 0.01).sum() > 2:
+                raise SystemExit('layout error: run %d passes through the chamber at %s'
+                                 % (i, ch.c))
+
+
 def build(layout, bore, wall):
     runs, chambers = layout()
-    pipes, rooms = Mesh(), Mesh()
+    pipes, pipes_collision, rooms = Mesh(), Mesh(), Mesh()
     for run in runs:
         add_run(pipes, run, bore, wall)
+        add_run(pipes_collision, run, bore, wall, collision=True)
     for ch in chambers:
         add_chamber(rooms, ch, bore, wall)
-    return runs, chambers, pipes, rooms
+    return runs, chambers, pipes, pipes_collision, rooms
 
 
 def main():
@@ -489,7 +687,7 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--layout', choices=['cad', 'sewer', 'all'], default='all')
+    ap.add_argument('--layout', choices=['cad', 'sewer', 'network', 'all'], default='all')
     ap.add_argument('--bore', type=float, default=BORE, help='inside diameter in m (default 0.9)')
     ap.add_argument('--wall', type=float, default=WALL, help='wall thickness in m (default 0.1)')
     ap.add_argument('-o', '--output-dir', default=os.path.join(here, '..', 'meshes'))
@@ -497,22 +695,28 @@ def main():
     if args.bore + 2 * args.wall > CHAMBER_SIZE - 0.2:
         CHAMBER_SIZE = args.bore + 2 * args.wall + 1.0
 
-    jobs = {'cad': [('agos_pipe', cad_layout)],
-            'sewer': [('agos_sewer', sewer_layout)]}
-    todo = jobs['cad'] + jobs['sewer'] if args.layout == 'all' else jobs[args.layout]
-    for name, layout in todo:
-        runs, chambers, pipes, rooms = build(layout, args.bore, args.wall)
-        parts = [(name if not chambers else name + '_pipes', pipes)]
+    jobs = {'cad': ('agos_pipe', cad_layout),
+            'sewer': ('agos_sewer', sewer_layout),
+            'network': ('agos_network', network_layout)}
+    todo = list(jobs) if args.layout == 'all' else [args.layout]
+    for key in todo:
+        name, layout = jobs[key]
+        runs, chambers, pipes, pipes_collision, rooms = build(layout, args.bore, args.wall)
+        pipe_name = name if not chambers else name + '_pipes'
+        parts = [(pipe_name, pipes, pipes_collision)]
         if chambers:
-            parts.append((name + '_chambers', rooms))
-        for part, mesh in parts:
+            parts.append((name + '_chambers', rooms, rooms))
+        for part, visual, collision in parts:
             title = 'AGOS %s, bore %.3f m, wall %.3f m' % (part, args.bore, args.wall)
             base = os.path.join(args.output_dir, part)
-            n_obj = mesh.write_obj(base + '.obj', title)
-            mesh.write_stl(base + '.stl', title)
-            print('wrote %s.obj/.stl: %d triangles' % (os.path.normpath(base), n_obj))
+            n_obj = visual.write_obj(base + '.obj', title)
+            n_stl = collision.write_stl(base + '.stl', title + ', collision')
+            print('wrote %s.obj (%d triangles) and .stl (%d triangles)'
+                  % (os.path.normpath(base), n_obj, n_stl))
         print('  %s: %.1f m of pipe in %d runs, %d chambers'
               % (name, sum(r.length for r in runs), len(runs), len(chambers)))
+        for i, ch in enumerate(chambers):
+            print('    chamber %d at (%.2f, %.2f)' % (i + 1, ch.c[0], ch.c[1]))
 
 
 if __name__ == '__main__':

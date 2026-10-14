@@ -1,8 +1,17 @@
+"""
+Gazebo with the AGOS robot, its sensors bridged to ROS, odometry and RViz.
+
+    ros2 launch agos_sim sim.launch.py
+    ros2 launch agos_sim sim.launch.py world:=agos_sewer.sdf gz_gui:=false
+
+agos.launch.py starts this together with RTAB-Map, Nav2 and the explorer.
+"""
 import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (AppendEnvironmentVariable, DeclareLaunchArgument,
-                            IncludeLaunchDescription)
+                            IncludeLaunchDescription, OpaqueFunction)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
@@ -10,35 +19,53 @@ from launch_ros.actions import Node
 import xacro
 
 
+def _robot_state_publisher(context, *args, **kwargs):
+    """robot_state_publisher with the URDF built for the chosen camera settings."""
+    xacro_file = os.path.join(get_package_share_directory('agos_sim'), 'urdf', 'agos_urdf.xacro')
+    mappings = {name: LaunchConfiguration(name).perform(context)
+                for name in ('camera_width', 'camera_height', 'camera_rate')}
+    robot_desc = xacro.process_file(xacro_file, mappings=mappings).toxml()
+    return [Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        output='screen',
+        parameters=[{'robot_description': robot_desc, 'use_sim_time': True}]
+    )]
+
+
 def generate_launch_description():
     pkg_path = get_package_share_directory('agos_sim')
-    xacro_file = os.path.join(pkg_path, 'urdf', 'agos_urdf.xacro')
     bridge_config = os.path.join(pkg_path, 'config', 'bridge.yaml')
     ekf_config = os.path.join(pkg_path, 'config', 'ekf.yaml')
     rviz_config = os.path.join(pkg_path, 'rviz', 'agos.rviz')
 
-    robot_desc = xacro.process_file(xacro_file).toxml()
-
     # ---------- Launch arguments ----------
     args = [
         DeclareLaunchArgument(
-            'world', default_value='agos_sewer.sdf',
-            description='World file name inside agos_sim/worlds: agos_sewer.sdf '
-                        '(900 mm sewer network with manholes, the default), '
+            'world', default_value='agos_sewer_network.sdf',
+            description='World file name inside agos_sim/worlds: '
+                        'agos_sewer_network.sdf (the default: 248 m of twisting 900 mm '
+                        'pipe between 5 manholes), agos_sewer.sdf (the smaller sewer), '
                         'agos_pipe.sdf (your CAD pipe at 900 mm) or agos_world.sdf '
                         '(open ground). It must load the Sensors and IMU systems '
                         'or the sensors stay silent.'),
         # Default spawn pose: the world origin facing +x. That is the middle of
-        # chamber A in agos_sewer.sdf and the middle of the longest straight in
-        # agos_pipe.sdf. z puts the tracks just above the floor (0.124 m in the
-        # chambers, about 0.12 m where the tracks touch the 900 mm pipe).
+        # manhole M1 in agos_sewer_network.sdf, the middle of chamber A in
+        # agos_sewer.sdf and the middle of the longest straight in
+        # agos_pipe.sdf. z puts the tracks just above the floor (0.124 m in
+        # the chambers, about 0.12 m where the tracks touch the 900 mm pipe).
         DeclareLaunchArgument('spawn_x', default_value='0.0'),
         DeclareLaunchArgument('spawn_y', default_value='0.0'),
         DeclareLaunchArgument('spawn_z', default_value='0.14'),
         DeclareLaunchArgument('spawn_yaw', default_value='0.0'),
         DeclareLaunchArgument(
+            'gz_gui', default_value='true',
+            description='Open the Gazebo window. false = run the simulation without '
+                        'it (the sensors still work, and everything else runs faster); '
+                        'watch the robot in RViz instead'),
+        DeclareLaunchArgument(
             'headless', default_value='false',
-            description='Run the Gazebo server only, without its GUI window'),
+            description='Old name for gz_gui:=false'),
         DeclareLaunchArgument(
             'rviz', default_value='true',
             description='Start RViz'),
@@ -47,15 +74,16 @@ def generate_launch_description():
             description='Odometry from the EKF (track speed + IMU turn rate, '
                         'config/ekf.yaml). false = raw track odometry, which '
                         'over-counts turns in pipe bends.'),
+        DeclareLaunchArgument(
+            'camera_width', default_value='320',
+            description='RGB-D camera image width (640 for the old, sharper camera)'),
+        DeclareLaunchArgument(
+            'camera_height', default_value='240',
+            description='RGB-D camera image height (480 for the old camera)'),
+        DeclareLaunchArgument(
+            'camera_rate', default_value='10',
+            description='RGB-D camera frames per second (15 for the old camera)'),
     ]
-
-    # ---------- Robot description ----------
-    node_robot_state_publisher = Node(
-        package='robot_state_publisher',
-        executable='robot_state_publisher',
-        output='screen',
-        parameters=[{'robot_description': robot_desc, 'use_sim_time': True}]
-    )
 
     # ---------- Gazebo ----------
     # Lets Gazebo resolve model://agos_sim/meshes/... (the pipe in the world
@@ -63,11 +91,12 @@ def generate_launch_description():
     gz_resource_path = AppendEnvironmentVariable(
         'GZ_SIM_RESOURCE_PATH', os.path.dirname(pkg_path))
 
-    # headless: server only; --headless-rendering keeps the camera and LiDAR
-    # working without a display
+    # Without the window: server only; --headless-rendering keeps the
+    # camera and LiDAR working without a display
     gz_flags = PythonExpression(
-        ["'-r -s --headless-rendering' if '", LaunchConfiguration('headless'),
-         "' == 'true' else '-r'"])
+        ["'-r -s --headless-rendering' if '", LaunchConfiguration('gz_gui'),
+         "'.lower() == 'false' or '", LaunchConfiguration('headless'),
+         "'.lower() == 'true' else '-r'"])
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(
             get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
@@ -140,7 +169,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription(args + [
-        node_robot_state_publisher,
+        OpaqueFunction(function=_robot_state_publisher),
         gz_resource_path,
         gazebo,
         spawn_entity,

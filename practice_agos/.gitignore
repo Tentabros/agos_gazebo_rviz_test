@@ -1,3 +1,9 @@
+# Made by colcon and ./agos, not source files. (Copies of build/, install/
+# and log/ committed earlier stay tracked until you run, once:
+#   git rm -r --cached practice_agos/build practice_agos/install practice_agos/log )
 build/
 install/
 log/
+missions/
+__pycache__/
+*.pyc

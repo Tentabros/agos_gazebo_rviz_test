@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+agos text eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf

@@ -132,10 +132,18 @@ def generate_launch_description():
     # ---------- Odometry ----------
     # The DiffDrive track odometry arrives on /wheel/odom (config/bridge.yaml).
     # ekf:=true  -> the EKF fuses it with the IMU gyro and publishes /odom and
-    #               the odom -> base_footprint TF.
+    #               the odom -> base_footprint TF. imu_level gives it the gyro
+    #               with the turn rate corrected for the robot's tilt.
     # ekf:=false -> /odom and the TF come straight from DiffDrive.
     use_ekf = IfCondition(LaunchConfiguration('ekf'))
     no_ekf = UnlessCondition(LaunchConfiguration('ekf'))
+    imu_level = Node(
+        package='agos_sim',
+        executable='imu_level',
+        parameters=[{'use_sim_time': True}],
+        condition=use_ekf,
+        output='screen'
+    )
     ekf = Node(
         package='robot_localization',
         executable='ekf_node',
@@ -174,6 +182,7 @@ def generate_launch_description():
         gazebo,
         spawn_entity,
         bridge,
+        imu_level,
         ekf,
         raw_odom_bridge,
         rviz,

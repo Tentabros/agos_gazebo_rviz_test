@@ -150,8 +150,9 @@
 
     <!-- Requires the gz-sim-imu-system world plugin (in all three worlds)
          or this topic stays silent. The EKF (config/ekf.yaml) takes the
-         robot's turn rate from this gyro. The noise is roughly that of a
-         low-cost MEMS IMU. -->
+         robot's turn rate from this gyro, through imu_level (corrected for
+         the robot's tilt). The noise is roughly that of a low-cost MEMS
+         IMU. -->
     <gazebo reference="imu_link">
       <sensor name="agos_imu" type="imu">
         <always_on>true</always_on>

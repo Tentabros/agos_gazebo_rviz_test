@@ -41,6 +41,8 @@ setup(
         'console_scripts': [
             'explorer = agos_sim.explorer:main',
             'nav_supervisor = agos_sim.nav_supervisor:main',
+            'odom_gps = agos_sim.odom_gps:main',
+            'imu_level = agos_sim.imu_level:main',
         ],
     },
 )

@@ -4,7 +4,9 @@
 #
 #   ./agos start              Gazebo + RViz + RTAB-Map + Nav2 (drive with 2D Goal Pose)
 #   ./agos explore            the same, plus the autonomous 25 m exploration mission
+#   ./agos explore full       the same, but it explores the whole network, then comes back
 #   ./agos mission            run the mission in a simulation that is already running
+#                             (./agos mission full: the whole network)
 #   ./agos teleop             drive with the keyboard (in a second terminal)
 #   ./agos stop               stop everything
 #   ./agos shell              a terminal with ROS and the workspace ready to use
@@ -241,7 +243,8 @@ launch() {
 }
 
 # Everything a start can leave running
-SIM_PROCESSES=("ros2 launch $PKG" "$PKG/explorer" "$PKG/nav_supervisor" "teleop_twist_keyboard"
+SIM_PROCESSES=("ros2 launch $PKG" "$PKG/explorer" "$PKG/nav_supervisor" "$PKG/odom_gps"
+               "$PKG/imu_level" "teleop_twist_keyboard"
                "gz sim" "rviz2" "rtabmap" "parameter_bridge" "robot_state_publisher"
                "ekf_node" "controller_server" "planner_server" "smoother_server"
                "behavior_server" "bt_navigator" "waypoint_follower" "velocity_smoother"
@@ -332,12 +335,20 @@ fi
 
 case "$cmd" in
   start)   launch "$@" ;;
-  explore) launch explore:=true "$@" ;;
+  explore)
+    # ./agos explore full: the whole network instead of 25 m each way
+    case "${1:-}" in
+      full|all) shift; launch explore:=true explore_mode:=full "$@" ;;
+      legs) shift; launch explore:=true "$@" ;;
+      *) launch explore:=true "$@" ;;
+    esac ;;
   mission)
     ensure_built
     export AGOS_MISSION_DIR="${AGOS_MISSION_DIR:-$WS/missions}"
+    mode=legs
+    case "${1:-}" in full|all) mode=full; shift ;; legs) shift ;; esac
     # (wall clock on purpose: it reads the simulation time from /tf)
-    exec ros2 run "$PKG" explorer --ros-args -p use_sim_time:=false "$@" ;;
+    exec ros2 run "$PKG" explorer --ros-args -p use_sim_time:=false -p mode:=$mode "$@" ;;
   teleop)
     ros_env
     say "Keyboard driving: i forwards, , backwards, j/l turn, k stop (keep this window focused)"

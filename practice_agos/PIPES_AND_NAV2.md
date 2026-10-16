@@ -170,6 +170,11 @@ Fix: DiffDrive now uses an effective track separation of 0.373 m (the real
 rate is now the turn rate the robot really makes, and `/odom` reports it
 correctly. On flat ground the ratio is now 1.00 (it was 0.77).
 
+Later (`NETWORK_NAV_EXPLORE.md`, section 6): the outer road wheels now grip
+along the track, as the middle ones do, and the robot turns 0.98 to 1.0
+times as far as the diff-drive maths predicts without a correction, so
+`skid_factor` is back to 1.0.
+
 ### 5c. Pipe bends threw odometry off by 60° or more
 
 Even with 5b, the S-bend alone added 63° to the track odometry's heading
@@ -183,7 +188,9 @@ from the IMU's gyro, and publishes `/odom` and the `odom -> base_footprint`
 transform. The raw track odometry moved to `/wheel/odom`. The IMU now has
 realistic noise so the EKF has something real to filter. Run with `ekf:=false`
 to go back to raw track odometry. In testing (below) the EKF's odometry
-stayed within 5.3° of the truth through every bend and manhole turn.
+stayed within 5.3° of the truth through every bend and manhole turn. (Since
+the network round the gyro's turn rate reaches the EKF through `imu_level`,
+corrected for the robot's tilt: `NETWORK_NAV_EXPLORE.md`, section 6.)
 
 New dependency: `sudo apt install ros-lyrical-robot-localization`
 (also listed in `package.xml`, so `rosdep install` finds it).

@@ -2,9 +2,10 @@
 
 This round adds a larger, twistier sewer network as the default world, fixes
 the Nav2 problems in the Fix NAV notes, adds the proposal's autonomous
-mission (TAD frontier exploration, 25 m each way from the manhole), replaces
-the multi-terminal start with one command (`./agos`) on Ubuntu and in Docker,
-and makes the whole simulation lighter.
+mission (TAD frontier exploration, 25 m each way from the manhole) and a
+mode that explores the whole network, replaces the multi-terminal start with
+one command (`./agos`) on Ubuntu and in Docker, and makes the whole
+simulation lighter.
 
 ## Start here
 
@@ -14,11 +15,16 @@ and makes the whole simulation lighter.
 | Ubuntu with ROS 2 installed | `./agos start` | `./agos explore` | `./agos stop` or Ctrl+C |
 | Ubuntu or WSL with Docker, no ROS | `./agos start` (uses Docker by itself) | `./agos explore` | `./agos stop` |
 
+`explore` runs the proposal's mission, 25 m each way. To map the whole
+network instead, then come back, use `explore full` (section 5).
+
 Everything else:
 
 ```bash
+./agos explore full    # explore the whole network, then come back to the start
 ./agos teleop          # drive with the keyboard, in a second terminal
 ./agos mission         # run the mission in a simulation that is already running
+./agos mission full    # the same for the whole network
 ./agos shell           # a terminal with ROS and the workspace ready (any ros2 command)
 ./agos check           # what is installed, whether it is built, and whether the GPU is used
 ./agos build           # build (start and explore do this by themselves when needed)
@@ -66,7 +72,8 @@ Once, after copying this folder in:
 | 3 | Colour from the STL | Already done in the STL round: the six CAD colours are on the robot in Gazebo and RViz. Nothing to add. | `urdf/agos_materials.xacro` |
 | 4 | Simpler start, Ubuntu and Docker | One script, `agos`, for both, plus `agos.cmd` for Windows. | `agos`, `agos.cmd`, `docker/Dockerfile`, `docker/agos.sh` |
 | 5 | Autonomous exploration and navigation from the proposal | The two-leg mission with TAD frontier selection, a report at the end. | `agos_sim/explorer.py`, `agos_sim/frontiers.py`, `launch/agos.launch.py`, `test/test_frontiers.py` |
-| 6 | Other issues | RTAB-Map rotated the map in pipes and rejected loop closures; build, stop and RViz problems; see section 6. | `launch/slam_nav.launch.py`, `agos`, `rviz/agos.rviz` |
+| 5+ | Full map exploration, besides the proposal's 25 m each way | `./agos explore full`: every pipe and dead end of the network, chosen with the same TAD scores, then back to the start manhole. | `agos_sim/explorer.py`, `agos_sim/frontiers.py`, `launch/agos.launch.py`, `launch/slam_nav.launch.py`, `agos`, `test/test_explorer.py`, `test/test_frontiers.py` |
+| 6 | Other issues | The robot could get stuck crossing a manhole off-centre; RTAB-Map rotated the map in pipes, rejected loop closures, and once joined two places 33 m apart; build, stop and RViz problems; see section 6. | `urdf/agos_tracks.xacro`, `urdf/agos_urdf.xacro`, `tools/make_pipe_mesh.py`, `meshes/agos_*_chambers.*`, `launch/slam_nav.launch.py`, `agos_sim/odom_gps.py`, `agos`, `rviz/agos.rviz` |
 | + | Speed | Lighter physics, camera, meshes, Nav2, RViz; the Python nodes off `/clock`; see section 7. | several |
 
 ## 1. The network (default world)
@@ -89,7 +96,9 @@ The robot starts in M1 facing M2, with 49.5 m of pipe ahead and 44.8 m
 behind, so the proposal's 25 m each way fits without reaching the next
 manhole. Pipes only meet in manholes. In front of each pipe the manhole floor
 is shaped like the pipe (benching and a shallow channel), so a robot that
-reverses out of a pipe off-centre meets a ramp instead of a step.
+reverses out of a pipe off-centre meets a ramp instead of a step. The
+benching is 8 cm high, under the robot's belly: at 20 cm it caught the belly
+of a robot crossing a manhole off-centre (section 6).
 
 The other worlds are still there: `agos_sewer.sdf` (the smaller sewer, last
 round's default), `agos_pipe.sdf` (the CAD pipe) and `agos_world.sdf` (the
@@ -203,11 +212,162 @@ writes the report; `/explore/start` starts again. Parameters (with
 
 | Run | Legs | Result | Driven | Map error |
 |---|---|---|---|---|
-| Mission, 25 m legs | both explored to 25 m | completed, 342 s | 98.3 m | 0.06 m back at the start (largest: 0.65 m at the far end of leg 1, along the pipe) |
+| Mission, 25 m legs, with the final code | both explored to 25 m | completed, 338 s | 97.6 m | 0.03 m back at the start (largest: 0.38 m at the far end of leg 1) |
 | Fresh copy, `./agos explore leg_length:=12.0` | both explored to 12 m | completed, 166 s | 46.6 m | 0.03 m back at the start (largest 0.10 m) |
+
+### The whole network: `./agos explore full`
+
+`./agos explore full` maps every pipe the robot can reach, dead ends
+included, then drives back to the manhole it started in and writes the
+report. The same thing in `agos.launch.py` is `explore_mode:=full`, and in a
+simulation that is already running, `./agos mission full`. The 25 m mission
+above is still the default.
+
+First it turns once round in the start manhole (`look_round`). The camera
+only looks ahead, and RTAB-Map recognises a place by what the camera sees: in
+a test run the robot came back through the start in reverse, facing the
+other way, RTAB-Map did not know the place, and the map stayed 4 m off.
+
+It uses the same frontiers and the same TAD score, but the whole map at once
+needs more than "the highest F": a far frontier that scores higher would send
+the robot back and forth between the two ends of the loop. So:
+
+1. **Nearest pipe first.** It picks the highest F only among the frontiers
+   no more than `reach` (2 m) further along the pipes than the nearest one.
+2. **It keeps to the pipe it is in.** The goal moves on with the end of the
+   mapped pipe, so the robot drives through to the next manhole instead of
+   switching to another frontier halfway. At the start it takes the pipe it
+   is facing, and the pipe behind waits. If its goal goes from the map (the
+   end of a pipe at a bend can, until the robot sees round the bend), it
+   drives on towards it for up to 8 s before it chooses again; choosing
+   again at once sent it back and forth between a bend and a frontier 58 m
+   behind. It leaves its goal for later only for a frontier that has come
+   up at least 24 m (twice `peek`) nearer along the pipes and is still there
+   a second later, which happens when RTAB-Map redraws the map round the
+   robot after it chose.
+3. **The other pipes of a manhole.** Driving through a manhole, it remembers
+   the pipes it did not take. Once it is `peek` (12 m) past the manhole and
+   its own pipe goes on, it goes back once for them (they are often short
+   dead ends), then goes on with the nearest frontier, usually where it left
+   off. It maps the pipe it went back for before it goes back again for
+   anything. Without this it came back for the dead ends only after the
+   whole loop: 511 m instead of 305 m in the offline check below.
+4. **Long drives go in steps.** Nav2's global costmap is a 50 x 50 m window
+   round the robot, so it cannot plan to a goal more than 25 m away. A drive
+   longer than `hop_length` (8 m) goes in steps along the explorer's own route
+   through the mapped pipes, which also keeps Nav2 from cutting through
+   unmapped space. The next step is sent before the robot reaches the last
+   one, so it does not stop on the way.
+5. **Where it has been.** As in the 25 m mission, it skips frontiers next to
+   the path it drove (gaps that open in the walls of mapped pipe), but here
+   the path comes from RTAB-Map's map nodes (`/mapPath`), so when a loop
+   closure moves the map, the path moves with it. That path also counts as
+   passable for its routes, whatever the map shows there now: after a long
+   drive RTAB-Map can draw a wall twice, a little apart, and a pipe the robot
+   has just driven through then looks too narrow on the map. (RTAB-Map now
+   keeps that path free on the map too, for Nav2: `GridGlobal/FootprintRadius`,
+   see `RTABMAP_FIXES.md`.) Frontiers up to 2.5 m beside the path are mostly
+   gaps in such doubled walls, so it does not go to them, except for the end
+   of a pipe it left for later; the report lists them. Without this, a loop
+   that RTAB-Map had not closed sent it round the network again.
+6. **The end.** When no frontier is left, it tries the ones Nav2 could not
+   reach once more, then goes back to the start along the mapped pipes.
+
+**In RViz:** the yellow sphere is where it is going and the small orange one
+the step it is on; the frontiers, their F and the path are shown as before.
+
+**Report:** the same `missions/<date_time>/` files, with one line for the
+frontier goals instead of the table per leg, and the frontiers left at the
+end with why each one was left: not explored, could not be reached, reached
+but nothing more could be mapped from there, next to the path driven (item
+5), or a gap in the wall of a pipe already driven through. In `map.png` the
+first three kinds are red dots, and the path is RTAB-Map's own, which loop
+closures move with the map; `trajectory.csv` has where the robot was on
+the map at the time.
+
+**Parameters** (as above): `reach` (2.0 m), `peek` (12.0 m), `hop_length`
+(8.0 m), `look_round` (true), `map_path_topic` (`/mapPath`), and
+`stuck_timeout`, `autostart`;
+`leg_length`, `legs` and `turn_around` are not used.
+
+**Against the proposal.** The proposal limits one insertion to halfway
+between access shafts (scope, item 10; 30 m in the limitations), on a tether
+that carries power and Ethernet. A real AGOS could not drive round this 248 m
+loop on its tether, so this mode is for the simulation: mapping the whole
+network, testing RTAB-Map's loop closures, and trying longer runs than the
+proposal's.
+
+**Results:**
+
+On the 4-core test computer without a GPU, where Gazebo ran at about 0.3
+times real time:
+
+- **Offline check.** The explorer's choices (`WholeMap` and the frontiers in
+  `frontiers.py`) ran on a map of the true network, drawn from the layout in
+  `tools/make_pipe_mesh.py`, with a point robot and a 10 m LiDAR. It mapped
+  all 9 runs of pipe to their ends, the dead ends included, with 125
+  frontier goals and 301 m of driving, then 4 m back to the start: 305 m.
+  This checks the choices only, not the driving or RTAB-Map.
+- **In the simulation** (`./agos explore full gz_gui:=false rviz:=false`):
+  completed. The robot mapped every pipe and dead end and came back to the
+  start manhole after 401 m, in 1409 s of simulation time (83 minutes
+  here). Coming into the start manhole, RTAB-Map recognised it and closed
+  the loop: the robot's position on the map went from 3.9 m off to 0.02 m.
+  By then the odometry was 7.3 m off (1.8% of the distance driven), and the
+  EKF's heading had stayed within 0.6 deg.
+- **The map at the end is not right everywhere.** The loop closure moved
+  the whole map, but compared with the true pipes, RTAB-Map's final path
+  is within 0.6 m of the pipes' centre lines over half its length and up
+  to 2 m off round M5, on the far side of the loop. The robot drives round
+  the loop once, so the start is the only place where the loop closes.
+
+![The map and RTAB-Map's path at the end of that run](docs/agos_explore_full_map.png)
+
+Five earlier runs found the problems in section 6 (the robot stuck in a
+manhole, RTAB-Map turning the map, rejecting every loop closure, and
+joining places 33 m apart). The runs after them:
+
+| Run | Result | Driven | What went wrong | Changed |
+|---|---|---|---|---|
+| 6 | "completed", but 18 m from the start | 403 m | RTAB-Map undid the right loop closures at the start by a hair, then took a pipe 18 m away for the start | `RGBD/OptimizeMaxError` 5, a 12 m radius |
+| 7 | could not get back to the start | 356 m | It came back through the start in reverse; RTAB-Map did not know the place, and the map stayed 3.9 m off | `look_round` |
+| 8 | stopped by hand | 510 m | A speck on the map closed the pipe to M5, then the robot rocked back and forth for 10 minutes | Specks count as free; stuck means no headway |
+| 9 | stopped by hand | 243 m | The first headway check took a moving robot for stuck | Headway counted from where it last made some |
+| 10 | completed | 401 m | | (above) |
+
+**Limits.** The odometry drifts about 1.8% of the distance driven, and
+RTAB-Map corrects the map only where the robot comes back to a place it
+has seen facing the same way, because the camera only looks ahead. Back
+in a pipe facing the other way, RTAB-Map can draw the pipe a second time,
+a little apart. On a long drive back through such pipes Nav2 may find no
+way through; the explorer then stops with "could not get back to the
+start" instead of trying forever. RTAB-Map also looks for loop
+closures only within 12 m of where the odometry puts the robot: at 1.8%,
+that is about 650 m of driving without a loop closure (worked out, not
+tried), so a network much bigger than this one may need a larger
+`RGBD/LocalRadius`.
 
 ## 6. Other problems found and fixed
 
+- **The robot stuck in a manhole.** In a whole-network run the robot crossed
+  M4 0.45 m off the line of its pipes and stopped there. Its tracks kept
+  turning, so the odometry counted 6 m, but it did not move. The explorer's
+  stuck check did not notice: it watches the robot's position on the map,
+  which follows the odometry. Tracks slipping in place would still go
+  unnoticed, and the robot would keep trying until stopped. Driving it in
+  Gazebo showed two causes. The 20 cm benching beside each opening caught
+  its belly, which is 78 mm off the ground; the benching is 8 cm now
+  (`tools/make_pipe_mesh.py` and the chamber meshes). And of the four road
+  wheels on each side only the middle two gripped: the outer two slid both
+  ways so that the robot could skid-steer. Where the floor curved up under
+  one track, the middle wheels lifted off and the outer ones could not push,
+  so the robot stalled 0.2 m off the middle. Now every road wheel grips
+  along the track and the outer ones slide only sideways
+  (`agos_tracks.xacro`). Driven at M4's openings from 0.2 m off the middle,
+  forwards and in reverse, the robot now goes into the pipe; from 0.42 m off
+  it stops at the wall, where it is too wide for the opening. It also turns
+  as fast as commanded now without a correction, so `skid_factor` is 1.0 (it
+  was 1.30, `agos_urdf.xacro`).
 - **RTAB-Map turned the map in pipes.** LiDAR scan matching between
   neighbouring map nodes cannot tell how far the robot moved along a round
   pipe, and it rotated the map 6.5 deg in a test mission while the gyro
@@ -219,19 +379,73 @@ writes the report; `/explore/start` starts again. Parameters (with
   completely ("Rejecting all added loop closures"). It now takes the
   `odom -> base_footprint` transform with a realistic uncertainty (1.4 cm
   and 0.4 deg per step). See `RTABMAP_FIXES.md`, section 4.
+- **RTAB-Map joined places that only looked alike.** Every pipe in the
+  simulation has the same concrete texture and every manhole looks the same.
+  Late in a whole-network run RTAB-Map took one pipe for another 33 m away (a
+  loop closure that passed all its checks), the map turned 100 deg, and the
+  robot could not find its way back. A new node, `odom_gps`, now gives
+  RTAB-Map the robot's odometry as if it were a GPS fix, and RTAB-Map only
+  looks for loop closures with places within 12 m of where the odometry says
+  the robot is (`Rtabmap/LoopGPS`, `RGBD/LocalRadius`). In the next run, back
+  at the start after 400 m, RTAB-Map undid every right loop closure there by
+  a hair: its check lets a closure stretch the map's links 3 standard
+  deviations, and they stretched 3.0001 to 3.0005. The map stayed 9 m off,
+  and RTAB-Map then took a pipe 18 m away for the start. The check allows 5
+  now (`RGBD/OptimizeMaxError`); replayed with these settings, that run's map
+  data closes the loop, and every closure in it is right. RTAB-Map also uses
+  PCL's ICP now in every install (`Icp/Strategy` 0), the one all the tests
+  here ran with. See `RTABMAP_FIXES.md`, section 4.
+- **The heading in bends.** The EKF adds up the gyro's z rate as the
+  robot's heading. Tilted on a pipe wall, the gyro's z axis is not vertical
+  and measures only part of a turn: through one bend, tilted up to 12 deg, an
+  88 deg turn came out 0.6 deg short. Out and back that cancels; round a loop
+  it adds up. A new node, `imu_level`, now gives the EKF the heading's own
+  rate of turn, from the gyro and the IMU's roll and pitch (`/imu/level`).
+  In the last whole-network run (401 m) the EKF's heading stayed within
+  0.6 deg of the truth, while the gyro's z rate alone drifted 5.7 deg.
+- **A speck on the map closed a pipe.** In a whole-network run the robot
+  turned back 3 m short of a pipe that went on for 20 m. One 5 cm cell in
+  the middle of the pipe was marked as wall, most likely where the LiDAR's
+  scan, tilted with the robot, met the bottom of the pipe ahead. The
+  explorer keeps the robot's centre 0.2 m from walls, so beyond that cell
+  the pipe looked closed and its end could not be reached. One or two wall
+  cells with no unknown space round them now count as free for the
+  explorer (`frontiers.py`, `Grid`); Nav2, on its finer map, has room to
+  pass one. On the long drive back that followed, the robot rocked 3 m back
+  and forth for 10 minutes where its map showed the pipe twice, because the
+  stuck check counted any 0.3 m of movement as progress. Stuck now means
+  40 s (`stuck_timeout`) without 0.3 m of headway towards the goal,
+  measured from where the robot last made some, so driving back and forth
+  does not count (`test/test_explorer.py`).
 - **RViz crashed on opening with the Navigation 2 panel** (in a test on a
   virtual display), because the saved window layout did not include the
   panel. The layout is saved with it now, in a 1280 x 800 window.
 - **Explorer:** a crash when a log message changed level; the robot going
   back for gaps in walls it had already passed; a frontier just inside the
   pipe behind the start counting for both legs; a Nav2 check that could hang
-  forever; headings shown as "360 deg" or "-0 deg" in the report.
+  forever; headings shown as "360 deg" or "-0 deg" in the report. A goal
+  that Nav2 drops only because RTAB-Map's `map -> odom` transform came late
+  ("Unable to transform goal pose into costmap frame"; on this 4-core test
+  computer it was up to 1.7 s late, a few times in a long run) is sent again
+  a second later, for up to 15 s, instead of being given up as unreachable.
+  A goal Nav2 refuses with "Start occupied" (its map shows the robot inside
+  a wall) is sent again after backing up 0.25 m. After it gets to a
+  frontier it waits 2 s for RTAB-Map to add what the LiDAR sees from there
+  before it chooses again, and a "reached" from Nav2 with the robot more
+  than 0.6 m from the goal (once 1.2 m, as a loop closure moved the map) is
+  not counted. A mission stopped with Ctrl+C or `./agos stop` still writes
+  its report, and no longer prints a traceback and "publisher's context is
+  invalid" errors after it. The report's distance driven counted the
+  robot's jumps on the map at loop closures (4 m at the end of a
+  whole-network run); it is added up on the odometry now. A path past the
+  edge of the map drew an orange line across the whole of `map.png`.
 - **Build:** the committed `build/` and `install/` from another computer make
   `colcon build` fail with "can't open file .../build/agos_sim/setup.py"; see
   section 4, point 3.
 - **Package:** `package.xml` lists the Nav2, RTAB-Map and Python packages the
   launch files use, so `rosdep` and `./agos check` know them; lint (flake8,
-  pep257) is clean and `test/test_frontiers.py` has 14 tests.
+  pep257) is clean and `test/test_explorer.py`, `test/test_frontiers.py`
+  and `test/test_imu_level.py` have 33 tests.
 
 ## 7. Speed
 
@@ -271,6 +485,9 @@ Harmless lines in the terminal:
   busy for a moment.
 - `LifecycleNode is not shut down` and Gazebo "escalating to SIGTERM" when
   stopping.
+- `RuntimeWarning: coroutine 'Executor._make_handler.<locals>.handler' was
+  never awaited` from the explorer now and then when it is stopped: rclpy
+  stopped before running a callback it had lined up.
 
 ## 8. What was tested, and what was not
 
@@ -280,6 +497,9 @@ Tested here (4 CPU cores, no GPU):
   the missions above, `./agos build`, `start`, `explore`, `stop` and `check`,
   Nav2 restarting after being stopped, RViz with this config on a virtual
   display (screenshot checked: panel, map, camera, explorer markers).
+  RTAB-Map was built here from source with GTSAM, the graph optimizer the
+  ROS packages use, and with PCL's ICP, which the launch file now selects
+  for every install (section 6).
 - **Docker with the ROS 2 Lyrical base image** (Gazebo Jetty 10.5,
   Python 3.14): `./agos check`, `build`, `stop`, `reset` and the
   wrong-folder check; the network world, the robot, the bridge, the sensor
@@ -296,14 +516,19 @@ in the terminal are the most useful things to send.
 New: `agos`, `agos.cmd`, `.gitattributes`, `.gitignore`,
 `NETWORK_NAV_EXPLORE.md`, `agos_sim/launch/agos.launch.py`,
 `agos_sim/agos_sim/explorer.py`, `agos_sim/agos_sim/frontiers.py`,
-`agos_sim/agos_sim/nav_supervisor.py`, `agos_sim/test/test_frontiers.py`,
+`agos_sim/agos_sim/nav_supervisor.py`, `agos_sim/agos_sim/odom_gps.py`,
+`agos_sim/agos_sim/imu_level.py`, `agos_sim/test/test_explorer.py`,
+`agos_sim/test/test_frontiers.py`, `agos_sim/test/test_imu_level.py`,
 `agos_sim/test/data/`, `agos_sim/worlds/agos_sewer_network.sdf`,
-`agos_sim/meshes/agos_network_*`, `docs/agos_network_overview.png`.
+`agos_sim/meshes/agos_network_*`, `docs/agos_network_overview.png`,
+`docs/agos_explore_full_map.png`.
 
 Changed: `agos_sim/launch/sim.launch.py`, `agos_sim/launch/slam_nav.launch.py`,
 `agos_sim/config/nav2_agos.yaml`, `agos_sim/config/bridge.yaml`,
+`agos_sim/config/ekf.yaml`,
 `agos_sim/rviz/agos.rviz`, `agos_sim/urdf/agos_urdf.xacro`,
 `agos_sim/urdf/agos_sensors.xacro`, `agos_sim/urdf/agos_tracks.xacro`,
 `agos_sim/tools/*.py`, `agos_sim/meshes/agos_pipe.*` and `agos_sewer_*`
 (regenerated, lighter), `agos_sim/package.xml`, `agos_sim/setup.py`,
-`docker/Dockerfile`, `docker/agos.sh`, `RTABMAP_FIXES.md`.
+`docker/Dockerfile`, `docker/agos.sh`, `RTABMAP_FIXES.md`, `PIPES_AND_NAV2.md`
+(a note on the skid factor).

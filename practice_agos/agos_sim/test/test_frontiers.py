@@ -11,7 +11,8 @@ import math
 import os
 import time
 
-from agos_sim.frontiers import angle_diff, close_gaps, dilate, Grid, Snapshot
+from agos_sim.frontiers import (angle_diff, close_gaps, dilate, Grid, nearest_first, Snapshot,
+                                WholeMap)
 import numpy as np
 
 RES = 0.05
@@ -53,6 +54,15 @@ class MapBuilder:
             d = np.hypot(self.x - x, self.y - y)
             self.free |= d <= half
             self.wall |= (d > half) & (d <= half + wall)
+
+    def cap(self, x, y, heading, half=0.45, wall=0.1):
+        """Close the end of a pipe at (x, y), heading out of it, with a wall."""
+        ux, uy = math.cos(heading), math.sin(heading)
+        along = (self.x - x) * ux + (self.y - y) * uy
+        across = np.abs(-(self.x - x) * uy + (self.y - y) * ux)
+        end = (along > 0.0) & (along <= wall) & (across <= half + wall)
+        self.free &= ~end
+        self.wall |= end
 
     def grid(self):
         a = np.full((self.h, self.w), -1, np.int8)
@@ -175,6 +185,29 @@ def test_small_wall_gaps_are_not_frontiers():
     assert not snap.walls[r, c] and snap.traversable[r, c]
 
 
+def test_specks_do_not_close_the_pipe():
+    # wall cells on their own in the middle of the pipe, as when the LiDAR's
+    # tilted scan meets the bottom of the pipe: one 0.05 m cell 3 m on and
+    # two 0.1 m apart 1.3 m on. The end of the pipe beyond them is still a
+    # frontier the robot can get to.
+    m = MapBuilder(-1.6, -2.0, 9.0, 2.0)
+    m.chamber(0.0, 0.0)
+    m.pipe([(0.0, 0.0), (7.0, 0.0)])
+    specks = [(4.225, 0.025), (2.525, 0.025), (2.625, 0.025)]
+    for x, y in specks:
+        speck = (np.abs(m.x - x) < 0.01) & (np.abs(m.y - y) < 0.01)
+        assert speck.sum() == 1
+        m.free &= ~speck
+        m.wall |= speck
+    grid = m.grid()
+    assert all(grid.free[grid.cell(x, y)] for x, y in specks)
+    snap = Snapshot(grid, (0.0, 0.0), (0.0, 0.0))
+    east = [f for f in snap.frontiers() if f.goal[0] > 6.0]
+    assert len(east) == 1 and 6.5 < east[0].path < 9.0, east
+    # the walls are still walls
+    assert grid.occ[grid.cell(4.225, 0.5)] and grid.occ[grid.cell(4.225, -0.5)]
+
+
 def test_gap_closing_width():
     # gaps of 1 or 2 cells in a wall close, a 0.9 m pipe opening does not
     for gap, closed in ((1, True), (2, True), (9, False)):
@@ -217,6 +250,224 @@ def test_dilate_disc():
     m[5, 5] = True
     assert dilate(m, 1).sum() == 9
     assert dilate(m, 3)[5, 8] and dilate(m, 3)[8, 6] and not dilate(m, 3)[8, 8]
+
+
+def test_route_follows_the_pipe():
+    # an L-shaped pipe: the route goes round the corner, inside the pipe
+    m = MapBuilder(-1.6, -2.0, 14.0, 12.0)
+    m.chamber(0.0, 0.0)
+    m.pipe([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)])
+    snap = Snapshot(m.grid(), (0.0, 0.0))
+    end = snap.snap((10.0, 9.0))
+    route = snap.route(end)
+    assert route[0] == snap.robot_cell and route[-1] == end
+    assert all(snap.traversable[c] for c in route)
+    steps = sum(math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(route, route[1:]))
+    assert abs(steps * snap.g.res - snap.path_length(end)) < 1.0
+    assert snap.route_passes(end, (10.0, 0.0), 0.5)          # round the corner
+    assert not snap.route_passes(end, (5.0, 5.0), 1.0)       # not across it
+
+
+def test_waypoint_steps_along_the_route():
+    m = MapBuilder(-1.6, -2.0, 14.0, 12.0)
+    m.chamber(0.0, 0.0)
+    m.pipe([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)])
+    snap = Snapshot(m.grid(), (0.0, 0.0))
+    end = snap.snap((10.0, 9.0))
+    x, y = snap.waypoint(end, 8.0)
+    # 8 m along the pipe, in the middle of it
+    assert 7.0 < x < 8.8 and abs(y) < 0.1, (x, y)
+    x, y = snap.waypoint(end, 13.0)
+    assert abs(x - 10.0) < 0.1 and 1.5 < y < 4.0, (x, y)
+    assert snap.waypoint(end, 25.0) is None      # shorter than that: go straight there
+
+
+def test_driven_path_opens_a_wall_mapped_twice():
+    # after drift, the pipe's top wall is in the map a second time, 0.3 m
+    # further in, for 3 m: there is no room for the robot there on the map,
+    # but the robot has just driven through, so the way back is open along
+    # its path
+    m = MapBuilder(-1.6, -2.0, 14.0, 2.0)
+    m.chamber(0.0, 0.0)
+    m.pipe([(0.0, 0.0), (12.0, 0.0)])
+    twice = (m.x > 4.0) & (m.x < 7.0) & (m.y >= 0.05) & (m.y <= 0.15)
+    m.free &= ~twice
+    m.wall |= twice
+    grid = m.grid()
+    snap = Snapshot(grid, (10.0, 0.0))
+    assert not math.isfinite(snap.path_length(snap.snap((0.0, 0.0))))
+    driven = [(x, -0.2) for x in np.arange(0.0, 10.01, 0.3)]
+    snap = Snapshot(grid, (10.0, 0.0), driven=driven)
+    assert 9.5 < snap.path_length(snap.snap((0.0, 0.0))) < 10.5
+    # only along the path: the wall itself is still a wall, and two points
+    # far apart (a jump in the path) are not joined
+    assert not snap.traversable[grid.cell(5.5, 0.5)]
+    snap = Snapshot(grid, (10.0, 0.0), driven=[(0.0, -0.2), (10.0, -0.2)])
+    assert not math.isfinite(snap.path_length(snap.snap((0.0, 0.0))))
+
+
+def test_nearest_first():
+    # the east pipe is known 6 m out, the west one 1.5 m: TAD alone takes
+    # the far one, nearest_first the near one, and TAD again within reach
+    snap = Snapshot(manhole_with_two_pipes(east=6.0, west=1.5), (0.0, 0.0))
+    frontiers = snap.frontiers()
+    assert max(frontiers, key=lambda f: f.score).goal[0] > 0
+    assert nearest_first(frontiers, 2.0).goal[0] < 0
+    assert nearest_first(frontiers, 10.0).goal[0] > 0
+
+
+def test_whole_map_gives_up_a_far_frontier_for_a_near_one():
+    # going to the end of a pipe 35 m east when the map round the robot shows
+    # a pipe going on 1.5 m west: it goes west, once the west frontier has
+    # been there for two choices (not a gap that opens for a moment), and
+    # leaves the east one for later; 10 m east, it keeps going
+    for east, keeps in ((35.0, False), (10.0, True)):
+        snap = Snapshot(manhole_with_two_pipes(east=east, west=1.5), (0.0, 0.0))
+        frontiers = snap.frontiers()
+        far = max(frontiers, key=lambda f: f.path)
+        chooser = WholeMap()
+        chooser.target = far.goal
+        f, hold = chooser.choose(snap, frontiers)
+        assert hold and f is None
+        f, hold = chooser.choose(snap, frontiers)
+        if keeps:
+            assert hold and f is None
+        else:
+            assert f is not None and f.goal[0] < 0, f and f.goal
+            assert chooser.expects(snap, far)
+
+
+def test_whole_map_does_not_go_back_from_a_pipe_it_went_back_for():
+    # the robot is 3 m into a west pipe; it passed the east one 17 m ago. On
+    # its own pipe it would go back for the east one now; on a trip back for
+    # the west pipe it maps that one first.
+    snap = Snapshot(manhole_with_two_pipes(east=20.0, west=8.0), (-3.0, 0.0))
+    frontiers = snap.frontiers()
+    east = max(frontiers, key=lambda f: f.goal[0])
+    west = min(frontiers, key=lambda f: f.goal[0])
+    for detour, goes_back in ((False, True), (True, False)):
+        chooser = WholeMap()
+        chooser.target = west.goal
+        chooser.side = [(east.goal, (14.0, 0.0))]
+        chooser.detour = detour
+        f, hold = chooser.choose(snap, frontiers)
+        if goes_back:
+            assert f is not None and f.goal == east.goal and chooser.detour
+        else:
+            assert hold and f is None
+
+
+def test_whole_map_expects_its_goal_and_the_pipes_it_left():
+    # the explorer goes to a frontier beside the path driven only if it is
+    # the one the robot is going to or one it left for later, also after the
+    # map has grown past where that frontier was
+    snap = Snapshot(manhole_with_two_pipes(east=6.0, west=3.0), (0.0, 0.0))
+    frontiers = snap.frontiers()
+    east = max(frontiers, key=lambda f: f.goal[0])
+    west = min(frontiers, key=lambda f: f.goal[0])
+    chooser = WholeMap()
+    assert not chooser.expects(snap, east) and not chooser.expects(snap, west)
+    chooser.target = (east.goal[0] - 0.5, east.goal[1])
+    assert chooser.expects(snap, east) and not chooser.expects(snap, west)
+    chooser.target = None
+    chooser.waiting = [(west.goal[0] + 2.0, west.goal[1])]
+    assert chooser.expects(snap, west) and not chooser.expects(snap, east)
+
+
+def test_whole_map_drives_on_when_its_frontier_goes():
+    # the frontier it was going to has gone from the map (the end of a pipe
+    # at a bend can, until the robot sees round it): it keeps going for up to
+    # `wait` s, then chooses another; given no time, it chooses at once
+    snap = Snapshot(manhole_with_two_pipes(east=6.0, west=3.0), (0.0, 0.0))
+    frontiers = snap.frontiers()
+    gone = (30.0, 0.0)
+    chooser = WholeMap(wait=8.0)
+    chooser.target = gone
+    assert chooser.choose(snap, frontiers, now=100.0) == (None, True)
+    assert chooser.choose(snap, frontiers, now=107.0) == (None, True)
+    f, hold = chooser.choose(snap, frontiers, now=108.5)
+    assert f is not None and not hold and chooser.target == f.goal
+    chooser = WholeMap(wait=8.0)
+    chooser.target = gone
+    f, hold = chooser.choose(snap, frontiers)
+    assert f is not None and not hold
+
+
+def explore_whole_map(m, start, lidar=8.0, step=0.6):
+    """
+    Explore a MapBuilder world the way explorer.py does in full mode.
+
+    A point robot with a 360 deg LiDAR moves `step` m at a time along the
+    route to the frontier WholeMap chooses, and when none is left, drives
+    back to the start. Returns (known map, path).
+    """
+    known = np.full((m.h, m.w), -1, np.int8)
+    walls = m.wall & ~m.free             # (pipes open their way through the manhole walls)
+    blocked = walls | ~m.free
+    ang = np.linspace(-math.pi, math.pi, 720, endpoint=False)
+    dist = np.arange(0.05, lidar, RES * 0.7)
+    chooser = WholeMap()
+    pose = list(start)
+    path, reached = [tuple(start[:2])], []
+    for tick in range(2000):
+        cc = ((pose[0] + np.cos(ang)[:, None] * dist - m.ox) / RES).astype(int)
+        rr = ((pose[1] + np.sin(ang)[:, None] * dist - m.oy) / RES).astype(int)
+        inside = (cc >= 0) & (cc < m.w) & (rr >= 0) & (rr < m.h)
+        cc, rr = np.clip(cc, 0, m.w - 1), np.clip(rr, 0, m.h - 1)
+        stop = blocked[rr, cc] | ~inside
+        first = np.where(stop.any(axis=1), stop.argmax(axis=1), len(dist))
+        seen = np.arange(len(dist))[None, :] < first[:, None]
+        known[rr[seen], cc[seen]] = 0
+        hit = np.nonzero(first < len(dist))[0]
+        wall = walls[rr[hit, first[hit]], cc[hit, first[hit]]]
+        known[rr[hit[wall], first[hit[wall]]], cc[hit[wall], first[hit[wall]]]] = 100
+        snap = Snapshot(Grid(known.ravel(), m.w, m.h, RES, m.ox, m.oy), tuple(pose[:2]))
+        passed = [p for p in path if math.hypot(p[0] - pose[0], p[1] - pose[1]) > 3.0]
+        frontiers = [f for f in snap.frontiers()
+                     if not any(math.hypot(f.goal[0] - x, f.goal[1] - y) < 0.25
+                                for x, y in reached)
+                     and not any(math.hypot(f.goal[0] - x, f.goal[1] - y) < 0.75
+                                 for x, y in passed)]
+        f, hold = chooser.choose(snap, frontiers, heading=pose[2] if tick == 0 else None)
+        if f is None and not hold:
+            route = snap.route(snap.snap(start[:2]))
+            return known, path + [snap.g.xy(*c) for c in route[1:]]
+        route = snap.route(snap.snap(chooser.target))
+        k = next((i for i, c in enumerate(route) if snap.path_length(c) >= step), None)
+        if k is None:                 # got there
+            x, y = chooser.target
+            reached.append(chooser.target)
+            chooser.drop()
+        else:
+            x, y = snap.g.xy(*route[k])
+        pose = [x, y, math.atan2(y - pose[1], x - pose[0])]
+        path.append((x, y))
+    raise AssertionError('exploration did not end')
+
+
+def test_whole_map_on_a_small_network():
+    # four manholes in a 16 x 12 m loop, a dead end off B that can be seen to
+    # its end from B, and one round a bend off D that cannot
+    m = MapBuilder(-2.0, -18.0, 25.0, 2.0)
+    a, b, c, d = (0.0, 0.0), (16.0, 0.0), (16.0, -12.0), (0.0, -12.0)
+    for ch in (a, b, c, d):
+        m.chamber(*ch)
+    for p, q in ((a, b), (b, c), (c, d), (d, a)):
+        m.pipe([p, q])
+    m.pipe([b, (23.0, 0.0)])
+    m.cap(23.0, 0.0, 0.0)
+    m.pipe([d, (0.0, -15.0), (-1.5, -15.0)])
+    m.cap(-1.5, -15.0, math.pi)
+    known, path = explore_whole_map(m, (0.0, 0.0, 0.0))
+    # all of it mapped: every free cell 0.2 m or more from a wall is known
+    inner = m.free & ~dilate(m.wall & ~m.free, 4)
+    assert (known[inner] == 0).mean() > 0.99
+    # once round, into both dead ends and back to the start: about 71 m for a
+    # robot that knew the map beforehand, over 112 m for one that went round
+    # twice
+    driven = sum(math.hypot(p[0] - q[0], p[1] - q[1]) for p, q in zip(path, path[1:]))
+    assert driven < 100.0, driven
+    assert math.hypot(path[-1][0], path[-1][1]) < 0.3, path[-1]
 
 
 def _real_map(name):

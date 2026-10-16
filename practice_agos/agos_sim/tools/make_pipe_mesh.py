@@ -71,8 +71,14 @@ FLOOR_LIFT = 0.024
 # that arrives off-centre rides up the side and slides back to the middle
 # instead of hitting the edge of the opening, and one that reverses out of a
 # pipe off-centre meets a ramp, not a 24 mm step its rear wheels cannot climb.
+# Beside the opening the benching slopes back down to the floor over
+# BENCH_FADE. It is kept low, under the robot's 78 mm belly clearance: 0.2 m
+# benching faded over 0.25 m made a ridge beside each opening that caught the
+# belly of a robot crossing the manhole 0.45 m off the middle of a pipe, and
+# its tracks then spun without moving it, forwards or back.
 BENCH_LENGTH = 0.6
-BENCH_HEIGHT = 0.2
+BENCH_HEIGHT = 0.08
+BENCH_FADE = 0.5
 
 AROUND = 64             # segments around the bore in the visual mesh (what the camera sees)
 AROUND_OUTSIDE = 24     # segments around the outside of the pipe (only seen from above)
@@ -404,7 +410,7 @@ def add_floor(mesh, ch, floor, r_in, uv_scale, step=0.04):
             ac = np.minimum(a, r_in)
             pipe = r_in - np.sqrt(r_in ** 2 - ac ** 2) - FLOOR_LIFT   # pipe bottom above the floor
             bump = np.clip(pipe, 0.0, BENCH_HEIGHT)
-            bump *= 1.0 - smooth01((a - r_in) / 0.25)  # fade out beside the opening
+            bump *= 1.0 - smooth01((a - r_in) / BENCH_FADE)  # fade out beside the opening
             lift = np.maximum(lift, bump * into)
             # channel: the middle of the pipe bottom is below the floor
             dip = np.minimum(dip, np.minimum(pipe, 0.0) * into)

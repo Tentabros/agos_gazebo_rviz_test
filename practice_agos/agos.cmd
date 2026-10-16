@@ -1,6 +1,7 @@
 @echo off
 rem AGOS simulation from Windows: double-click this file, or in PowerShell
 rem (in this folder) type  .\agos start  or  .\agos explore  or  .\agos stop
+rem (.\agos explore full maps the whole network instead of 25 m each way)
 rem
 rem It runs the ./agos script in WSL (Ubuntu), which uses Docker there, so it
 rem does exactly what ./agos does in the Ubuntu terminal. .\agos help lists

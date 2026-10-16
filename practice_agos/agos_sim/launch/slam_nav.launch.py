@@ -65,6 +65,10 @@ RTABMAP_PARAMS = {
     'odom_sensor_sync': True,
     # RTAB-Map's own parameters must be strings
     'Reg/Strategy': '1',               # loop closures: ICP on the LiDAR scan
+    # PCL's ICP, the one all the tests ran with. RTAB-Map built with
+    # libpointmatcher (the ROS packages) would use that instead, with other
+    # settings, untested here.
+    'Icp/Strategy': '0',
     'Reg/Force3DoF': 'true',           # ground robot: x, y, yaw only
     # No LiDAR ICP between neighbouring map nodes or nodes close in space:
     # in a round pipe ICP cannot tell how far the robot moved along a
@@ -77,7 +81,24 @@ RTABMAP_PARAMS = {
     'Grid/3D': 'false',
     'Grid/RayTracing': 'true',
     'Grid/RangeMax': '10.0',
+    # Where the robot has been is free on the map. Back in a pipe after a
+    # long drive, the map can have drifted and RTAB-Map then draws its wall a
+    # second time, a little apart; without this, that wall can cross the
+    # path just driven, and Nav2 refuses to plan ("Start occupied").
+    'GridGlobal/FootprintRadius': '0.25',
     'Optimizer/GravitySigma': '0',     # no IMU constraints, we are already 2D
+    # Loop closures only with map nodes within 12 m of where odometry says
+    # the robot is (odom_gps gives RTAB-Map the odometry as a GPS fix). The
+    # pipes and manholes look alike: matches 33 m and 14 m away bent the map.
+    # Back at the start after the whole network (400 m) the odometry was 9 m
+    # off, and 12 m leaves room for that.
+    'Rtabmap/LoopGPS': 'true',
+    'RGBD/LocalRadius': '12',
+    # A loop closure is undone if, after it, any link of the map is stretched
+    # more than 5 standard deviations (the default is 3). Closing the whole
+    # network's loop stretches the odometry links a little more than 3; a
+    # wrong match (pipes 6 m apart look alike too) stretches them 20 times.
+    'RGBD/OptimizeMaxError': '5',
 }
 
 # Mapping: start a new map every time (the old database is deleted).
@@ -219,6 +240,16 @@ def _launch_setup(context, *args, **kwargs):
     )
 
     actions = [rtabmap_slam, rtabmap_viz]
+    if not localization:
+        # 2b. The odometry as a GPS fix in each new map node (see
+        # RTABMAP_PARAMS, Rtabmap/LoopGPS). Wall clock: it only copies the
+        # time of the odometry it passes on.
+        actions.append(Node(
+            package='agos_sim',
+            executable='odom_gps',
+            output='screen',
+            parameters=[{'use_sim_time': False}],
+        ))
     if not _true(context, 'nav2'):
         return [GroupAction([SetParameter('use_sim_time', LaunchConfiguration('use_sim_time'))]
                             + actions)]

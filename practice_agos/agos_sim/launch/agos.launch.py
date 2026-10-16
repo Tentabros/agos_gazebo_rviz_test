@@ -3,6 +3,7 @@ The whole AGOS simulation in one command.
 
     ros2 launch agos_sim agos.launch.py                  # drive it yourself (2D Goal Pose, teleop)
     ros2 launch agos_sim agos.launch.py explore:=true    # the autonomous 25 m mission
+    ros2 launch agos_sim agos.launch.py explore:=true explore_mode:=full   # map the whole network
     ros2 launch agos_sim agos.launch.py gz_gui:=false    # no Gazebo window: faster, watch in RViz
 
 It starts sim.launch.py (Gazebo, the robot, the sensor bridge, odometry,
@@ -50,6 +51,10 @@ def generate_launch_description():
                               description='Run the autonomous exploration mission'),
         DeclareLaunchArgument('leg_length', default_value='25.0',
                               description='How far (m along the pipe) to explore each way'),
+        DeclareLaunchArgument('explore_mode', default_value='legs',
+                              description="legs = the proposal's mission (leg_length each way "
+                                          'from the start); full = map the whole network, '
+                                          'then come back'),
     ]
 
     sim = IncludeLaunchDescription(
@@ -68,6 +73,7 @@ def generate_launch_description():
         executable='explorer',
         output='screen',
         parameters=[{'use_sim_time': False,
+                     'mode': LaunchConfiguration('explore_mode'),
                      'leg_length': ParameterValue(LaunchConfiguration('leg_length'),
                                                   value_type=float)}],
         condition=IfCondition(LaunchConfiguration('explore')),

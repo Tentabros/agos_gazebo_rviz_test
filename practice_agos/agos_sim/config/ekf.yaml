@@ -30,7 +30,10 @@ ekf_filter_node:
     odom0_differential: false
 
     # IMU gyro: turn rate only (no magnetometer heading in a buried pipe).
-    imu0: /imu/data
+    # /imu/level is /imu/data with the gyro's z rate replaced by the heading's
+    # rate of turn (imu_level, started with this EKF): tilted on a pipe wall,
+    # the gyro's z axis measures only part of a turn.
+    imu0: /imu/level
     imu0_config: [false, false, false,
                   false, false, false,
                   false, false, false,

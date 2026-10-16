@@ -26,13 +26,16 @@
   <xacro:property name="track_y"          value="0.1436"/>  <!-- track centre, either side -->
   <xacro:property name="track_width"      value="0.042"/>
   <xacro:property name="track_separation" value="${2*track_y}"/>
-  <!-- A tracked robot skids sideways when it turns, so it turns less than
-       its track speeds say: in Gazebo it turns 0.77x as far as plain
-       diff-drive maths predicts. DiffDrive uses this wider "effective" track
-       separation (0.287 m / 0.77) so a commanded turn rate is what the robot
-       really does, and /odom reports the turn it really made. Re-measure if
-       you change the wheels or their friction. -->
-  <xacro:property name="skid_factor"      value="1.30"/>
+  <!-- DiffDrive uses track_separation x skid_factor as its wheel separation.
+       A tracked robot that skids when it turns needs more than 1: it turns
+       less than its track speeds say. This one turns 0.98-1.0x as far as
+       plain diff-drive maths predicts in Gazebo, because its outer road
+       wheels slide sideways (agos_tracks.xacro), so 1.0 makes a commanded
+       turn rate what the robot really does. (It was 1.30 when the outer
+       wheels had no grip along the track either.) If you change the wheels
+       or their friction, command a turn in place, compare with the turn
+       Gazebo reports, and set this to commanded / measured x this value. -->
+  <xacro:property name="skid_factor"      value="1.0"/>
   <xacro:property name="wheel_radius"     value="0.0385"/>
   <xacro:property name="wheel_z"          value="${wheel_radius - ground_to_base}"/>
   <xacro:property name="wheel_mass"       value="0.25"/>

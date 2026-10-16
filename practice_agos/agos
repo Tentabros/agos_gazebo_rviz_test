@@ -158,6 +158,22 @@ ros_env() {
   fi
   # Qt (RViz) wants this folder to exist
   if [ -n "${XDG_RUNTIME_DIR:-}" ]; then mkdir -p -m 700 "$XDG_RUNTIME_DIR" 2> /dev/null; fi
+  gpu_env
+  return 0
+}
+
+gpu_env() {
+  # WSL: Mesa can pick software rendering (llvmpipe) although a Windows GPU
+  # is there (seen with Mesa 26). Its D3D12 driver reaches any GPU with a
+  # Windows driver for WSL (NVIDIA, AMD or Intel), so use it when a test
+  # shows it works. Which GPU: MESA_D3D12_DEFAULT_ADAPTER_NAME (docker_up).
+  # LIBGL_ALWAYS_SOFTWARE=1 or a GALLIUM_DRIVER of your own still wins.
+  # (Linux without WSL: Mesa picks the GPU itself through /dev/dri.)
+  [ -e /dev/dxg ] && [ -z "${GALLIUM_DRIVER:-}" ] && [ -z "${LIBGL_ALWAYS_SOFTWARE:-}" ] || return 0
+  command -v glxinfo > /dev/null 2>&1 || return 0
+  if GALLIUM_DRIVER=d3d12 glxinfo -B 2> /dev/null | grep -q "renderer string: D3D12"; then
+    export GALLIUM_DRIVER=d3d12
+  fi
   return 0
 }
 

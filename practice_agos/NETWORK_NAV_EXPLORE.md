@@ -466,8 +466,11 @@ tried), so a network much bigger than this one may need a larger
 If it is still slow:
 
 1. `./agos check` shows `Graphics:`. "llvmpipe" means no GPU: Gazebo, RViz and
-   the camera are drawn by the CPU. On Windows update the graphics driver and
-   run `wsl --update` in PowerShell, then `./agos reset`.
+   the camera are drawn by the CPU. On Windows (WSL) `agos` uses Mesa's D3D12
+   driver whenever a test shows it reaches the GPU, whatever the GPU: Mesa 26
+   in the Lyrical image chose llvmpipe by itself on a PC with an NVIDIA card.
+   If it still says llvmpipe, update the graphics driver and run
+   `wsl --update` in PowerShell, then `./agos reset`.
 2. `./agos start gz_gui:=false`.
 3. `camera_rate:=5` halves the camera work again.
 4. Docker on a Windows laptop with two GPUs can draw on the weaker one.

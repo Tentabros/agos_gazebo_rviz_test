@@ -250,7 +250,7 @@ class Explorer(Node):
         self.failures = 0
         self.home_failures = 0
         self.trajectory = []           # (t, x, y, yaw, state, leg)
-        self.driven = 0.0              # m, on the odometry (add_driven)
+        self.distance = 0.0            # m driven, on the odometry (add_driven)
         self.last_odom = None
         self.events = []
         self.leg_stats = []
@@ -329,7 +329,7 @@ class Explorer(Node):
             return
         step = math.hypot(x - self.last_odom[0], y - self.last_odom[1])
         if step > 0.05:
-            self.driven += step
+            self.distance += step
             self.last_odom = (x, y)
 
     def leg_bearing(self):
@@ -1097,7 +1097,7 @@ class Explorer(Node):
     def report_text(self, grid):
         t0 = self.mission_start_time or self.now_s()
         if self.last_odom is not None:
-            driven = self.driven
+            driven = self.distance
         else:       # (no odometry: on the map, jumps and all)
             driven = sum(math.hypot(b[1] - a[1], b[2] - a[2])
                          for a, b in zip(self.trajectory, self.trajectory[1:]))

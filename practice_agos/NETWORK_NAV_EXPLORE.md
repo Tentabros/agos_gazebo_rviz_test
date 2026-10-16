@@ -445,7 +445,7 @@ tried), so a network much bigger than this one may need a larger
 - **Package:** `package.xml` lists the Nav2, RTAB-Map and Python packages the
   launch files use, so `rosdep` and `./agos check` know them; lint (flake8,
   pep257) is clean and `test/test_explorer.py`, `test/test_frontiers.py`
-  and `test/test_imu_level.py` have 33 tests.
+  and `test/test_imu_level.py` have 34 tests.
 
 ## 7. Speed
 

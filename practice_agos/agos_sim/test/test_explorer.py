@@ -6,6 +6,7 @@ Tests for the explorer: the stuck check, the distance driven and the report's ma
 Needs ROS 2 sourced (the module imports rclpy and Nav2's messages); skipped
 without it. The methods run on stand-ins for the node, without ROS running.
 """
+import ast
 import types
 
 import numpy as np
@@ -66,7 +67,7 @@ def test_standing_still_is_stuck():
 
 def test_distance_driven_leaves_out_jitter():
     s = types.SimpleNamespace(odom_frame='odom', robot_frame='base_footprint',
-                              driven=0.0, last_odom=None)
+                              distance=0.0, last_odom=None)
 
     def at(x):
         tf = types.SimpleNamespace(transform=types.SimpleNamespace(
@@ -75,10 +76,10 @@ def test_distance_driven_leaves_out_jitter():
         explorer.Explorer.add_driven(s)
     for i in range(1000):           # standing still, the odometry 1 cm back and forth
         at(0.01 * (i % 2))
-    assert s.driven == 0.0
+    assert s.distance == 0.0
     for i in range(501):            # then 10 m in 2 cm steps
         at(0.02 * i)
-    assert 9.9 <= s.driven <= 10.0
+    assert 9.9 <= s.distance <= 10.0
 
 
 def report_map(**node):
@@ -110,3 +111,18 @@ def test_report_map_shows_rtabmaps_path_in_full_mode():
                                     (1.0, 2.5, 1.5, 0.0, 'exploring', 1)])
     assert orange[159 - 40, 40:200].all()       # y = 0.5 m, x = 0.5 to 2.5 m
     assert not orange[159 - 120].any()          # y = 1.5 m
+
+
+def test_no_attribute_hides_a_method():
+    # self.<name> = ... with the name of one of the node's methods hides the
+    # method: a full-map mission once stopped at its first frontier with
+    # "'float' object is not callable"
+    tree = ast.parse(open(explorer.__file__).read())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'Explorer')
+    methods = {n.name for n in cls.body if isinstance(n, ast.FunctionDef)}
+    assigned = {t.attr for n in ast.walk(cls) if isinstance(n, (ast.Assign, ast.AugAssign))
+                for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+                for t in ast.walk(t)
+                if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+                and t.value.id == 'self'}
+    assert not methods & assigned, methods & assigned

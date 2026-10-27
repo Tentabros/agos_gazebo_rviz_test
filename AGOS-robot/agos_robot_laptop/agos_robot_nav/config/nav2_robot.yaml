@@ -1,0 +1,89 @@
+# The real test robot: changes merged over nav2_base.yaml (which is merged
+# over Nav2's stock params) by launch/robot.launch.py. Only the values that
+# differ from the simulated AGOS are here.
+#
+# The test robot: two yellow TT gear motors (no encoders) on an L298N, driven
+# by the ESP32-C3 from /cmd_vel. Its odometry is the RPLiDAR C1's scan
+# matching on the Pi, and everything reaches this laptop over the Ethernet
+# tether (or Wi-Fi).
+#
+# Measure your robot and change the footprint (and the speeds after the
+# motor calibration in the guide). The footprint is round base_link, the
+# point between the two wheels, x forward and y left. It matches the chassis
+# box in agos_robot_pi/config/robot.yaml: 0.25 x 0.15 m, its centre 0.03 m
+# ahead of the wheels: x from -0.095 to 0.155, y from -0.075 to 0.075.
+
+bt_navigator:
+  ros__parameters:
+    # transforms come from the Pi over the network: a little late now and then
+    transform_tolerance: 0.5
+
+controller_server:
+  ros__parameters:
+    general_goal_checker:
+      xy_goal_tolerance: 0.15
+    FollowPath:
+      # TT motors with 65 mm wheels top out at ~0.5 m/s; keep well under that
+      # so the motors still have room to correct
+      vx_max: 0.25
+      wz_max: 1.5
+    Reverse:
+      vx_min: -0.20
+
+planner_server:
+  ros__parameters:
+    GridBased:
+      minimum_turning_radius: 0.10
+      tolerance: 0.15
+    Mapped:
+      tolerance: 0.15
+    GridBased2D:
+      tolerance: 0.15
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      transform_tolerance: 0.5
+      footprint: "[[0.155, 0.075], [0.155, -0.075], [-0.095, -0.075], [-0.095, 0.075]]"
+      footprint_padding: 0.02
+      obstacle_layer:
+        scan:
+          # the C1 sees parts of the robot itself closer than this
+          obstacle_min_range: 0.15
+          raytrace_min_range: 0.15
+      inflation_layer:
+        inflation_radius: 0.30
+        cost_scaling_factor: 6.0
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      transform_tolerance: 0.5
+      # a room or a corridor, not 400 m of sewer: a lighter 20 x 20 m window
+      width: 20
+      height: 20
+      footprint: "[[0.155, 0.075], [0.155, -0.075], [-0.095, -0.075], [-0.095, 0.075]]"
+      footprint_padding: 0.02
+      obstacle_layer:
+        scan:
+          obstacle_min_range: 0.15
+          raytrace_min_range: 0.15
+      inflation_layer:
+        inflation_radius: 0.30
+        cost_scaling_factor: 6.0
+
+velocity_smoother:
+  ros__parameters:
+    max_velocity: [0.25, 0.0, 1.5]
+    min_velocity: [-0.20, 0.0, -1.5]
+    # gentle: the TT gearboxes and an L298N do not like sudden reversals
+    max_accel: [0.5, 0.0, 2.0]
+    max_decel: [-0.5, 0.0, -2.0]
+    # odometry comes from the LiDAR, not from the wheels
+    feedback: "OPEN_LOOP"
+
+behavior_server:
+  ros__parameters:
+    transform_tolerance: 0.5
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4

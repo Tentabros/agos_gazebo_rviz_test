@@ -1,0 +1,493 @@
+#!/usr/bin/env bash
+# AGOS test robot, laptop side: Nav2, RViz and the explorer for the robot
+# whose Raspberry Pi runs agos_robot_pi (./agos_robot start). On Ubuntu with
+# ROS 2 Lyrical installed, or through Docker (Windows + WSL, or any Linux).
+# It needs nothing from practice_agos (the simulation).
+#
+#   ./agos_laptop tether [interface]    once: the Ethernet cable to the Pi (laptop 10.77.0.1)
+#   ./agos_laptop start [address]       Nav2 + RViz (drive with 2D Goal Pose in RViz)
+#   ./agos_laptop explore [full|legs]   the same, plus autonomous exploration (full by default)
+#   ./agos_laptop ping [address]        can the laptop reach the robot, and is it running?
+#   ./agos_laptop teleop                (second terminal) drive the robot with the keyboard
+#   ./agos_laptop stop                  stop everything
+#   ./agos_laptop shell                 a terminal with ROS and the workspace ready to use
+#   ./agos_laptop build                 build the workspace (start does this when needed)
+#   ./agos_laptop check                 check the setup: ROS, Nav2, Zenoh, graphics, tether
+#   ./agos_laptop help                  more options
+#
+# The robot's address: over the Ethernet tether it is 10.77.0.2, the default.
+# Over Wi-Fi give the Pi's address once (./agos_robot check on the Pi shows
+# it): ./agos_laptop start 192.168.1.42. It is remembered; ./agos_laptop
+# start tether goes back to the cable.
+#
+# Launch options go at the end: ./agos_laptop explore legs leg_length:=3.0
+#
+# Where it runs: if ROS 2 is installed (/opt/ros/<distro>), here. If not,
+# and Docker is, inside the "agos-laptop" container (made from
+# docker/Dockerfile the first time, which takes a while). AGOS_DOCKER=1
+# forces Docker; AGOS_DOCKER=0 forces the local install. On Windows,
+# agos_laptop.cmd runs this script in WSL.
+
+WS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE=agos-laptop:lyrical
+CONTAINER=agos-laptop
+HOME_VOLUME=agos-laptop-home
+PKG=agos_robot_nav
+TETHER_NET=10.77.0
+LAPTOP_TETHER=$TETHER_NET.1
+PI_TETHER=$TETHER_NET.2
+TETHER_CON=agos-tether
+ZENOH_PORT=7447
+
+say() { printf '\033[1;36m[agos_laptop]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[agos_laptop]\033[0m %s\n' "$*" >&2; }
+die() { printf '\033[1;31m[agos_laptop]\033[0m %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  # the comment at the top of this file
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"
+  cat <<'EOF'
+
+More:
+  ./agos_laptop build --clean   delete build/ install/ log/ and build again
+  ./agos_laptop image           (Docker) rebuild the image after docker/Dockerfile changed
+  ./agos_laptop reset           (Docker) delete the container and make a fresh one
+  ./agos_laptop ros2 ...        any ros2 command through Zenoh, e.g. ./agos_laptop ros2 topic list
+                                (while ./agos_laptop start runs)
+EOF
+}
+
+in_wsl() { grep -qi microsoft /proc/version 2> /dev/null; }
+
+# ----------------------------------------------------------------- the tether
+# A direct Ethernet cable between the laptop and the Pi, on its own small
+# network: laptop 10.77.0.1, Pi 10.77.0.2 (./agos_robot tether on the Pi).
+# No router, no Wi-Fi, no DHCP; the laptop keeps its Wi-Fi for the internet
+# (never-default: the cable is never the way to the internet). The laptop is
+# also the Pi's clock (chrony), since the Pi may have no internet.
+
+tether_windows() {
+  cat <<EOF
+This is WSL: the Ethernet port belongs to Windows. Set it up there, once, in
+PowerShell run as Administrator ("Ethernet" is the adapter's name in
+Settings > Network; a USB Ethernet adapter may be "Ethernet 2"):
+
+  New-NetIPAddress -InterfaceAlias "Ethernet" -IPAddress $LAPTOP_TETHER -PrefixLength 24
+
+And make Windows the Pi's clock (Windows Time as an NTP server):
+
+  Set-ItemProperty "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\TimeProviders\\NtpServer" -Name Enabled -Value 1
+  Set-ItemProperty "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config" -Name AnnounceFlags -Value 5
+  Set-Service w32time -StartupType Automatic; Restart-Service w32time
+  New-NetFirewallRule -DisplayName "AGOS robot clock" -Direction Inbound -Protocol UDP -LocalPort 123 -RemoteAddress $TETHER_NET.0/24 -Action Allow
+
+Then plug in the cable, run ./agos_robot tether on the Pi, and here:
+  ./agos_laptop ping
+EOF
+}
+
+tether_setup() {
+  if in_wsl; then tether_windows; return 0; fi
+  [ -f /.dockerenv ] && die "Run ./agos_laptop tether on the laptop itself, not in the container"
+  command -v nmcli > /dev/null 2>&1 ||
+    die "NetworkManager (nmcli) not found. Give the Ethernet port the address $LAPTOP_TETHER/24 in your network settings (no gateway), then: ./agos_laptop ping"
+  local ifname="${1:-}"
+  if [ -z "$ifname" ]; then
+    ifname=$(nmcli -t -f DEVICE,TYPE device status 2> /dev/null | awk -F: '$2 == "ethernet" { print $1; exit }')
+    [ -n "$ifname" ] ||
+      die "No Ethernet port found (nmcli device status). A laptop without one needs a USB Ethernet adapter; plug it in and run this again."
+  fi
+  say "Ethernet tether on $ifname: this laptop is $LAPTOP_TETHER, the Pi $PI_TETHER"
+  sudo nmcli connection delete "$TETHER_CON" > /dev/null 2>&1
+  sudo nmcli connection add type ethernet ifname "$ifname" con-name "$TETHER_CON" \
+       ipv4.method manual ipv4.addresses "$LAPTOP_TETHER/24" ipv4.never-default yes \
+       ipv6.method link-local connection.autoconnect yes connection.autoconnect-priority 100 \
+       > /dev/null || die "nmcli could not add the connection"
+  sudo nmcli connection up "$TETHER_CON" > /dev/null 2>&1 ||
+    say "  (it comes up by itself when the cable is plugged in)"
+
+  say "Clock: this laptop serves the time to the Pi (chrony)"
+  command -v chronyc > /dev/null 2>&1 || sudo apt-get install -y chrony
+  local conf=/etc/chrony/conf.d/agos.conf
+  [ -d /etc/chrony/conf.d ] || conf=/etc/chrony/chrony.conf
+  if [ "$conf" = /etc/chrony/conf.d/agos.conf ]; then
+    printf 'allow %s.0/24\nlocal stratum 10\n' "$TETHER_NET" | sudo tee "$conf" > /dev/null
+  elif ! grep -q "allow $TETHER_NET.0/24" "$conf" 2> /dev/null; then
+    printf 'allow %s.0/24\nlocal stratum 10\n' "$TETHER_NET" | sudo tee -a "$conf" > /dev/null
+  fi
+  sudo systemctl restart chrony 2> /dev/null || sudo systemctl restart chronyd
+  if command -v ufw > /dev/null 2>&1 && sudo ufw status 2> /dev/null | grep -q "Status: active"; then
+    sudo ufw allow from "$TETHER_NET.0/24" to any port 123 proto udp > /dev/null
+  fi
+  robot_address tether > /dev/null
+  say "Done. Plug in the cable, run ./agos_robot tether on the Pi, then: ./agos_laptop ping"
+}
+
+tether_check() {
+  local a
+  a=$(ip -4 -o addr show 2> /dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }' | grep -x "$LAPTOP_TETHER")
+  if [ -n "$a" ]; then
+    say "Tether: this laptop is $LAPTOP_TETHER"
+    if ping -c 1 -W 2 "$PI_TETHER" > /dev/null 2>&1; then say "  the Pi answers at $PI_TETHER"
+    else warn "  no answer from the Pi at $PI_TETHER (cable in? ./agos_robot tether done on the Pi?)"; fi
+  elif in_wsl; then
+    if ping -c 1 -W 2 "$PI_TETHER" > /dev/null 2>&1; then say "Tether: the Pi answers at $PI_TETHER (through Windows)"
+    else say "Tether: no answer from $PI_TETHER (./agos_laptop tether shows the Windows set-up)"; fi
+  else
+    say "Tether: not set up (./agos_laptop tether), or the cable is out"
+  fi
+}
+
+# ----------------------------------------------------------------- where to run
+
+ros_installed() {
+  command -v ros2 > /dev/null 2>&1 && return 0
+  ls /opt/ros/*/setup.bash > /dev/null 2>&1
+}
+
+use_docker() {
+  case "${AGOS_DOCKER:-}" in
+    1|yes|true) return 0 ;;
+    0|no|false) return 1 ;;
+  esac
+  [ -f /.dockerenv ] && return 1          # already inside the container
+  ros_installed && return 1
+  command -v docker > /dev/null 2>&1
+}
+
+# ----------------------------------------------------------------- Docker side
+
+docker_image() {
+  if [ "${1:-}" = "--rebuild" ] || ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+    say "Building the Docker image $IMAGE (the first time takes 10-20 minutes)"
+    docker build -t "$IMAGE" "$WS/docker" || die "docker build failed"
+  fi
+}
+
+docker_up() {
+  docker info > /dev/null 2>&1 || die "Docker is not running. Start Docker Desktop (or: sudo service docker start) and try again."
+  docker_image
+  if ! docker container inspect "$CONTAINER" > /dev/null 2>&1; then
+    # Home folder (~/.ros: ROS logs) on a Docker volume, kept when the
+    # container is reset
+    if ! docker volume inspect "$HOME_VOLUME" > /dev/null 2>&1; then
+      docker volume create "$HOME_VOLUME" > /dev/null &&
+        docker run --rm --user 0 --volume "$HOME_VOLUME":/home/agos "$IMAGE" \
+          chown "$(id -u):$(id -g)" /home/agos > /dev/null
+    fi
+    local args=(
+      --name "$CONTAINER" --detach
+      --label agos_laptop.folder="$WS"          # which folder this container is for
+      --user "$(id -u):$(id -g)"                # your user id, so files you make stay yours
+      --volume "$WS":/ws --workdir /ws          # this folder is /ws inside the container
+      --volume "$HOME_VOLUME":/home/agos --env HOME=/home/agos
+      --volume /tmp/.X11-unix:/tmp/.X11-unix    # windows on your desktop (WSLg / X11)
+      --env DISPLAY="${DISPLAY:-:0}"
+      --env AGOS_MISSION_DIR=/ws/missions       # mission reports go to missions/ here
+    )
+    if [ -e /dev/dxg ]; then                    # WSL: the Windows GPU through Direct3D 12
+      args+=(--device /dev/dxg --volume /usr/lib/wsl:/usr/lib/wsl:ro)
+    elif [ -e /dev/dri ]; then                  # Linux: the GPU through Mesa
+      args+=(--device /dev/dri)
+    fi
+    local v
+    for v in MESA_D3D12_DEFAULT_ADAPTER_NAME LIBGL_ALWAYS_SOFTWARE; do
+      [ -n "${!v:-}" ] && args+=(--env "$v=${!v}")
+    done
+    # (Docker's own network: the Zenoh router in the container connects out
+    # to the Pi, so nothing has to reach into it)
+    docker run "${args[@]}" "$IMAGE" sleep infinity > /dev/null || die "could not create the container"
+  fi
+  docker start "$CONTAINER" > /dev/null || die "could not start the container (try ./agos_laptop reset)"
+  local folder
+  folder=$(docker container inspect -f '{{index .Config.Labels "agos_laptop.folder"}}' "$CONTAINER" 2> /dev/null)
+  if [ -n "$folder" ] && [ "$folder" != "<no value>" ] && [ "$folder" != "$WS" ]; then
+    die "The $CONTAINER container is for $folder. Run ./agos_laptop reset to make one for this folder."
+  fi
+  # Linux desktop: let the container (it runs as you) open windows
+  if [ ! -e /dev/dxg ] && [ -n "${DISPLAY:-}" ] && command -v xhost > /dev/null 2>&1; then
+    xhost +si:localuser:"$(id -un)" > /dev/null 2>&1
+  fi
+  return 0
+}
+
+in_docker() {
+  docker_up
+  local tty=() env=() v
+  [ -t 0 ] && [ -t 1 ] && tty=(-it)
+  for v in ROS_DOMAIN_ID ZENOH_CONFIG_OVERRIDE RUST_LOG; do
+    [ -n "${!v:-}" ] && env+=(-e "$v=${!v}")
+  done
+  exec docker exec "${tty[@]}" "${env[@]}" -e AGOS_DOCKER=0 "$CONTAINER" bash /ws/agos_laptop "$@"
+}
+
+# ----------------------------------------------------------------- ROS side
+
+ros_env() {
+  # ROS setup scripts are not written for "set -u"
+  set +u
+  if ! command -v ros2 > /dev/null 2>&1 || [ -z "${AMENT_PREFIX_PATH:-}" ]; then
+    local d
+    for d in ${ROS_DISTRO:-} lyrical; do
+      if [ -f "/opt/ros/$d/setup.bash" ]; then source "/opt/ros/$d/setup.bash"; break; fi
+    done
+    command -v ros2 > /dev/null 2>&1 || die "ROS 2 is not installed (no /opt/ros/<distro>/setup.bash)."
+  fi
+  if [ -f "$WS/install/setup.bash" ] &&
+     [ "$(cat "$WS/install/.agos_build_stamp" 2> /dev/null)" = "$(build_id)" ]; then
+    source "$WS/install/setup.bash"
+  fi
+  # Qt (RViz) wants this folder to exist
+  if [ -n "${XDG_RUNTIME_DIR:-}" ]; then mkdir -p -m 700 "$XDG_RUNTIME_DIR" 2> /dev/null; fi
+  gpu_env
+  # Everything talks through Zenoh: the router robot.launch.py starts (or
+  # straight to the Pi's, for ping)
+  export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+  export ZENOH_ROUTER_CHECK_ATTEMPTS="${ZENOH_ROUTER_CHECK_ATTEMPTS:-10}"
+  return 0
+}
+
+zenoh_ok() {
+  ros2 pkg prefix rmw_zenoh_cpp > /dev/null 2>&1 && return 0
+  if [ -f /.dockerenv ]; then
+    die "Zenoh (rmw_zenoh_cpp) is missing from this image. Outside the container: ./agos_laptop image, then ./agos_laptop reset"
+  fi
+  die "Zenoh is missing: sudo apt install ros-$ROS_DISTRO-rmw-zenoh-cpp"
+}
+
+gpu_env() {
+  # WSL: Mesa can pick software rendering (llvmpipe) although a Windows GPU
+  # is there. Its D3D12 driver reaches any GPU with a Windows driver for WSL,
+  # so use it when a test shows it works.
+  [ -e /dev/dxg ] && [ -z "${GALLIUM_DRIVER:-}" ] && [ -z "${LIBGL_ALWAYS_SOFTWARE:-}" ] || return 0
+  command -v glxinfo > /dev/null 2>&1 || return 0
+  if GALLIUM_DRIVER=d3d12 glxinfo -B 2> /dev/null | grep -q "renderer string: D3D12"; then
+    export GALLIUM_DRIVER=d3d12
+  fi
+  return 0
+}
+
+# What ROS and Python a build is for (kept in install/.agos_build_stamp): a
+# build made outside Docker does not work inside it, or the other way round.
+build_id() {
+  printf '%s %s\n' "${ROS_DISTRO:-ros}" \
+    "$(python3 -c 'import sys; print("python%d.%d" % sys.version_info[:2])' 2> /dev/null)"
+}
+
+needs_build() {
+  local stamp="$WS/install/.agos_build_stamp"
+  [ -f "$stamp" ] || return 0
+  [ -f "$WS/install/$PKG/share/$PKG/package.xml" ] || return 0
+  [ "$(cat "$stamp")" = "$(build_id)" ] || return 0
+  [ -n "$(find "$WS/$PKG" -newer "$stamp" -not -path '*/__pycache__*' -not -name '*.pyc' -print -quit)" ]
+}
+
+build() {
+  ros_env
+  cd "$WS" || exit 1
+  if [ "${1:-}" = "--clean" ]; then
+    say "Deleting build/ install/ log/"
+    rm -rf "$WS/build" "$WS/install" "$WS/log"
+    shift
+  fi
+  local stamp="$WS/install/.agos_build_stamp"
+  if [ -s "$stamp" ] && [ "$(cat "$stamp")" != "$(build_id)" ]; then
+    warn "build/ and install/ are for $(cat "$stamp"), not $(build_id): building again from clean."
+    rm -rf "$WS/build" "$WS/install" "$WS/log"
+  fi
+  local old=0
+  if [ -e "$WS/build" ] || [ -e "$WS/install" ]; then old=1; fi
+  say "Building $PKG"
+  if ! colcon build --packages-select "$PKG" "$@"; then
+    [ "$old" = 1 ] || die "Build failed (see the messages above)"
+    warn "Build failed over the old build/ and install/. Deleting them and building again."
+    rm -rf "$WS/build" "$WS/install" "$WS/log"
+    colcon build --packages-select "$PKG" "$@" || die "Build failed (see the messages above)"
+  fi
+  build_id > "$WS/install/.agos_build_stamp"
+  source "$WS/install/setup.bash"    # pick up the new install in this shell
+}
+
+ensure_built() {
+  ros_env
+  if needs_build; then build; fi
+}
+
+graphics_check() {
+  command -v glxinfo > /dev/null 2>&1 || return 0
+  local renderer
+  renderer=$(glxinfo -B 2>/dev/null | sed -n 's/.*OpenGL renderer string: //p')
+  [ -n "$renderer" ] || return 0
+  case "$renderer" in
+    *llvmpipe*|*softpipe*|*SWR*)
+      warn "Graphics: $renderer = software rendering (no GPU). RViz will be slow."
+      if [ -e /dev/dxg ] || [ -d /usr/lib/wsl ]; then
+        warn "  On Windows: update the graphics driver and WSL (wsl --update in PowerShell)."
+      fi
+      return 1 ;;
+    *) say "Graphics: $renderer" ;;
+  esac
+}
+
+# The robot's address: given (and remembered), remembered, or the tether's
+robot_address() {
+  local file="$WS/.robot_address" addr="${1:-}"
+  case "$addr" in
+    tether|cable) rm -f "$file"; addr="" ;;
+    "") [ -s "$file" ] && addr=$(cat "$file") ;;
+    *) echo "$addr" > "$file" 2> /dev/null ;;
+  esac
+  echo "${addr:-$PI_TETHER}"
+}
+
+zenoh_endpoint() {
+  case "$1" in
+    */*) echo "$1" ;;
+    *:*) echo "tcp/$1" ;;
+    *) echo "tcp/$1:$ZENOH_PORT" ;;
+  esac
+}
+
+# Everything a start can leave running
+PROCESSES=("ros2 launch $PKG" "$PKG/explorer" "$PKG/nav_supervisor" "teleop_twist_keyboard"
+           "rviz2" "controller_server" "planner_server" "smoother_server"
+           "behavior_server" "bt_navigator" "waypoint_follower" "velocity_smoother"
+           "lifecycle_manager" "rmw_zenohd")
+
+running() {
+  pgrep -f -- "ros2 launch $PKG|$PKG/explorer|$PKG/nav_supervisor|rmw_zenohd" > /dev/null 2>&1
+}
+
+stop_all() {
+  local p
+  pkill -INT -f -- "ros2 launch $PKG" 2> /dev/null
+  for _ in $(seq 1 15); do
+    pgrep -f -- "ros2 launch $PKG" > /dev/null 2>&1 || break
+    sleep 1
+  done
+  for p in "${PROCESSES[@]}"; do pkill -INT -f -- "$p" 2> /dev/null; done
+  sleep 1
+  for p in "${PROCESSES[@]}"; do pkill -KILL -f -- "$p" 2> /dev/null; done
+  say "Stopped"
+}
+
+launch() {
+  local addr="$1"
+  shift
+  if running; then
+    warn "Something from an earlier start is still running. Stopping it first."
+    stop_all
+  fi
+  ensure_built
+  zenoh_ok
+  graphics_check
+  export AGOS_MISSION_DIR="${AGOS_MISSION_DIR:-$WS/missions}"
+  say "Robot at $addr (Zenoh $(zenoh_endpoint "$addr"))"
+  say "Starting: ros2 launch $PKG robot.launch.py robot_host:=$addr $*"
+  say "The robot's Pi must be running ./agos_robot start. Stop with Ctrl+C."
+  exec ros2 launch "$PKG" robot.launch.py robot_host:="$addr" "$@"
+}
+
+robot_ping() {
+  local host endpoint status
+  host=$(robot_address "${1:-}")
+  ros_env
+  zenoh_ok
+  endpoint=$(zenoh_endpoint "$host")
+  say "Asking the robot at $endpoint how it is (up to 20 s)..."
+  # A Zenoh client of the Pi's router (as a peer it would try to reach the
+  # Pi's nodes directly). RUST_LOG: only Zenoh's errors among the output.
+  status=$(RUST_LOG=error \
+           ZENOH_CONFIG_OVERRIDE="mode=\"client\";connect/endpoints=[\"$endpoint\"]" \
+           timeout 60 ros2 topic echo --once --timeout 20 --field data \
+             /agos_robot/status std_msgs/msg/String 2> /dev/null | grep -m 1 ' | ')
+  if [ -n "$status" ]; then
+    say "Robot: $status"
+  elif [ "$host" = "$PI_TETHER" ]; then
+    die "No answer from the robot on the tether ($PI_TETHER). Is the cable in, ./agos_robot tether done on the Pi and ./agos_laptop tether here, and ./agos_robot start running? (Over Wi-Fi: ./agos_laptop ping <pi-address>)"
+  else
+    die "No answer from the robot at $host. Is ./agos_robot start running on the Pi, is the address right (./agos_robot check), and are both on the same network?"
+  fi
+}
+
+check() {
+  local ok=0 missing=() p have
+  ros_env
+  say "ROS 2: $ROS_DISTRO"
+  have=" $(ros2 pkg list 2> /dev/null | tr '\n' ' ') "
+  for p in rviz2 rmw_zenoh_cpp nav2_bringup nav2_controller nav2_mppi_controller nav2_planner \
+           nav2_smac_planner nav2_smoother nav2_behaviors nav2_bt_navigator \
+           nav2_waypoint_follower nav2_velocity_smoother nav2_lifecycle_manager \
+           nav2_rviz_plugins image_transport_plugins teleop_twist_keyboard; do
+    case "$have" in *" $p "*) ;; *) missing+=("$p") ;; esac
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    warn "Missing ROS packages: ${missing[*]}"
+    warn "  Install: sudo apt install $(printf "ros-$ROS_DISTRO-%s " "${missing[@]//_/-}")"
+    ok=1
+  else
+    say "ROS packages: all there"
+  fi
+  if needs_build; then say "Workspace: needs building (./agos_laptop build)"; else say "Workspace: built"; fi
+  graphics_check || ok=1
+  [ -f /.dockerenv ] || tether_check
+  say "Robot address: $(robot_address)"
+  return $ok
+}
+
+# ----------------------------------------------------------------- commands
+
+cmd="${1:-help}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+  help|-h|--help) usage; exit 0 ;;
+  tether) tether_setup "$@"; exit $? ;;
+esac
+
+if use_docker; then
+  case "$cmd" in
+    image) docker_image --rebuild; docker rm -f "$CONTAINER" > /dev/null 2>&1; exit 0 ;;
+    reset)
+      docker rm -f "$CONTAINER" > /dev/null 2>&1
+      docker_up
+      say "Fresh container ready"
+      exit 0 ;;
+    stop)
+      docker exec "$CONTAINER" bash /ws/agos_laptop stop 2> /dev/null
+      exit 0 ;;
+    check) tether_check; in_docker check ;;
+    *) in_docker "$cmd" "$@" ;;
+  esac
+fi
+
+case "$cmd" in
+  start)
+    # ./agos_laptop start [<address>|tether] [launch options]
+    addr=""
+    case "${1:-}" in ""|*:=*) ;; *) addr="$1"; shift ;; esac
+    launch "$(robot_address "$addr")" "$@" ;;
+  explore)
+    # ./agos_laptop explore [full|legs] [<address>|tether] [launch options]
+    mode=full
+    case "${1:-}" in full|all) shift ;; legs) mode=legs; shift ;; esac
+    addr=""
+    case "${1:-}" in ""|*:=*) ;; *) addr="$1"; shift ;; esac
+    launch "$(robot_address "$addr")" explore:=true explore_mode:="$mode" "$@" ;;
+  ping) robot_ping "$@" ;;
+  teleop)
+    ros_env
+    running || warn "./agos_laptop start is not running here: teleop needs its Zenoh router"
+    say "Keyboard driving: i forwards, , backwards, j/l turn, k stop, q/z faster/slower (keep this window focused)"
+    exec ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p speed:=0.15 -p turn:=1.0 "$@" ;;
+  stop)    stop_all ;;
+  shell)
+    ensure_built
+    say "ROS $ROS_DISTRO and the workspace are ready in this shell, through Zenoh (exit to leave)"
+    exec bash --rcfile <(printf 'source ~/.bashrc 2>/dev/null\nsource "%s/install/setup.bash"\nexport RMW_IMPLEMENTATION=rmw_zenoh_cpp\nPS1="(agos_laptop) $PS1"\n' "$WS") -i ;;
+  build)   build "$@" ;;
+  check)   check ;;
+  ros2)    ensure_built; exec ros2 "$@" ;;
+  image|reset) die "\"$cmd\" is for Docker; ROS 2 is installed here, so Docker is not used" ;;
+  *) warn "Unknown command: $cmd"; usage; exit 1 ;;
+esac

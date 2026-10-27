@@ -1,0 +1,6 @@
+* text=auto
+agos_robot text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.rules text eol=lf
+Dockerfile text eol=lf

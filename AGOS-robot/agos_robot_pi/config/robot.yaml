@@ -1,0 +1,25 @@
+# AGOS test robot: where everything sits. Measure your robot and change these
+# (metres and radians). robot.launch.py reads this file at every start.
+#
+# base_footprint is on the floor, exactly under the midpoint between the two
+# drive wheels' contact points (the point the robot turns about).
+# x points forward, y to the left, z up. Heights (z) are from the floor.
+
+# The yellow TT wheels are 65 mm across
+wheel_radius: 0.0325
+# Middle of the left tyre to the middle of the right tyre. The ESP32 needs the
+# same number: WHEEL_SEPARATION in esp32_motor_node/include/config.h
+wheel_separation: 0.135
+
+# The chassis as a box, only for drawing the robot in RViz. x: how far the
+# box's centre is ahead of the wheels' midpoint (negative: behind).
+chassis: {length: 0.25, width: 0.15, height: 0.06, x: 0.03}
+
+# The RPLiDAR C1's scan centre: its spinning axis, at the height of its
+# window. yaw: turn it until a box 1 m ahead of the robot shows on RViz's red
+# x axis (guide, "Check the sensor directions"): 0, 3.14159, 1.5708 or -1.5708.
+laser: {x: 0.0, y: 0.0, z: 0.16, yaw: 0.0}
+
+# The Gemini 335's camera_link: the depth origin, which is the left IR lens
+# seen from behind the camera. pitch > 0 tips the camera down.
+camera: {x: 0.09, y: 0.0, z: 0.12, roll: 0.0, pitch: 0.0, yaw: 0.0}

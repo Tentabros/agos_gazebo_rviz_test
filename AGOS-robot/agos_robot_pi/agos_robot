@@ -1,0 +1,447 @@
+#!/usr/bin/env bash
+# AGOS test robot, on its Raspberry Pi 4: the Gemini 335, the RPLiDAR C1,
+# LiDAR odometry, RTAB-Map, and the ESP32-C3 motor node through micro-ROS.
+# Nav2, the explorer and RViz run on the laptop (agos_robot_laptop: ./agos_laptop start).
+#
+#   ./agos_robot setup [laptop-address]   once: udev rules, USB buffer, clock sync (uses sudo)
+#   ./agos_robot tether [interface]       once: the Ethernet cable to the laptop (Pi 10.77.0.2,
+#                                         clock from the laptop at 10.77.0.1)
+#   ./agos_robot check                    devices, USB speed, Docker, network: is it all there?
+#   ./agos_robot start                    everything; Ctrl+C stops it (RTAB-Map saves the map)
+#   ./agos_robot start localization:=true reuse the last map instead of making a new one
+#   ./agos_robot start camera:=false      LiDAR only
+#   ./agos_robot status                   one status line (CPU, sensors, RTAB-Map, ESP32)
+#   ./agos_robot motor-test [v w]         (second terminal) drive each way briefly
+#   ./agos_robot motor-test duty          (second terminal) measure the top speed
+#   ./agos_robot stats                    totals of the last run
+#   ./agos_robot agent-log                what the micro-ROS agent says (ESP32 connection)
+#   ./agos_robot stop                     stop everything
+#   ./agos_robot image                    rebuild the Docker image
+#   ./agos_robot shell                    a terminal with ROS 2 ready, in the container
+#
+# Launch options go at the end: ./agos_robot start detection_rate:=0.5 stationary:=true
+#
+# Settings (environment variables):
+#   AGOS_ESP32=serial|wifi   how the ESP32 reaches the agent (default serial: USB, /dev/esp32)
+#   AGOS_ESP32_DEV=<device>  the ESP32's serial device (default /dev/esp32)
+#   AGOS_PI_PORT=<port>      the Zenoh port (default 7447)
+#   AGOS_DOCKER=0 or 1       use ROS 2 Lyrical installed on the Pi (0) or Docker (1)
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DISTRO=lyrical
+IMAGE="agos-robot:$DISTRO"
+CONTAINER=agos-robot
+HOME_VOLUME=agos-robot-home
+AGENT_IMAGE=microros/micro-ros-agent:kilted   # the ESP32 firmware's board_microros_distro
+AGENT_CONTAINER=agos-uros-agent
+PORT="${AGOS_PI_PORT:-7447}"
+ESP32="${AGOS_ESP32:-serial}"
+ESP32_DEV="${AGOS_ESP32_DEV:-/dev/esp32}"
+AGENT_UDP_PORT=8888
+TETHER_NET=10.77.0                  # the Ethernet tether: laptop .1, Pi .2
+LAPTOP_TETHER=$TETHER_NET.1
+PI_TETHER=$TETHER_NET.2
+TETHER_CON=agos-tether
+
+say() { printf '\033[1;32m[agos_robot]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[agos_robot]\033[0m %s\n' "$*" >&2; }
+die() { printf '\033[1;31m[agos_robot]\033[0m %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"
+}
+
+pi_model() {
+  if [ -n "${AGOS_PI_MODEL:-}" ]; then echo "$AGOS_PI_MODEL"; return; fi
+  if [ -r /proc/device-tree/model ]; then tr -d '\0' < /proc/device-tree/model; return; fi
+  echo "$(uname -n) ($(uname -m))"
+}
+
+my_addresses() {
+  if [ -n "${AGOS_PI_ADDRESSES:-}" ]; then echo "$AGOS_PI_ADDRESSES"; return; fi
+  local a
+  a=$(hostname -I 2> /dev/null) ||
+    a=$(ip -4 -o addr show 2> /dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }')
+  for a in $a; do
+    case "$a" in 127.*|172.17.*|*:*) ;; *) printf '%s ' "$a" ;; esac
+  done
+}
+
+inside_container() { [ -f /.dockerenv ]; }
+
+# What to type on the laptop: no address over the tether (the default there)
+laptop_hint() {
+  case " $(my_addresses) " in
+    *" $PI_TETHER "*) echo "./agos_laptop start" ;;
+    *) echo "./agos_laptop start $(my_addresses | awk '{print $1}')" ;;
+  esac
+}
+
+use_docker() {
+  case "${AGOS_DOCKER:-}" in
+    1|yes|true) return 0 ;;
+    0|no|false) return 1 ;;
+  esac
+  inside_container && return 1
+  [ -f "/opt/ros/$DISTRO/setup.bash" ] && return 1
+  command -v docker > /dev/null 2>&1 ||
+    die "Docker is not installed. Install it: curl -fsSL https://get.docker.com | sh (see the guide)"
+  return 0
+}
+
+docker_ok() {
+  docker info > /dev/null 2>&1 ||
+    die "Docker is not running, or you may not use it: sudo systemctl start docker; sudo usermod -aG docker \$USER (then log in again)"
+}
+
+# ================================================================ Docker side
+
+robot_image() {
+  if [ "${1:-}" = "--rebuild" ] || ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+    say "Building $IMAGE: ROS 2 $DISTRO, Orbbec driver, sllidar, RTAB-Map, Zenoh (20-40 minutes the first time)"
+    docker build --build-arg ROS_DISTRO="$DISTRO" -t "$IMAGE" "$DIR/docker" ||
+      die "docker build failed (see above)"
+  fi
+}
+
+robot_up() {
+  docker_ok
+  robot_image
+  if docker container inspect "$CONTAINER" > /dev/null 2>&1; then
+    local image folder
+    image=$(docker container inspect -f '{{.Config.Image}}' "$CONTAINER")
+    folder=$(docker container inspect -f '{{index .Config.Labels "agos_robot.folder"}}' "$CONTAINER")
+    if [ "$image" != "$IMAGE" ] || [ "$folder" != "$DIR" ]; then
+      docker rm -f "$CONTAINER" > /dev/null
+    fi
+  fi
+  if ! docker container inspect "$CONTAINER" > /dev/null 2>&1; then
+    if ! docker volume inspect "$HOME_VOLUME" > /dev/null 2>&1; then
+      docker volume create "$HOME_VOLUME" > /dev/null &&
+        docker run --rm --user 0 --volume "$HOME_VOLUME":/home/agos "$IMAGE" \
+          chown "$(id -u):$(id -g)" /home/agos > /dev/null
+    fi
+    # --network host: the Zenoh router listens on the Pi's own address.
+    # --privileged and /dev, /run/udev: the camera (libusb), /dev/rplidar,
+    # and devices plugged in after the container started.
+    docker run --name "$CONTAINER" --detach \
+      --label agos_robot.folder="$DIR" \
+      --network host --privileged \
+      --volume /dev:/dev --volume /run/udev:/run/udev:ro \
+      --user "$(id -u):$(id -g)" \
+      --volume "$DIR":/agos_robot --workdir /agos_robot \
+      --volume "$HOME_VOLUME":/home/agos --env HOME=/home/agos \
+      "$IMAGE" sleep infinity > /dev/null || die "could not create the container"
+  fi
+  docker start "$CONTAINER" > /dev/null || die "could not start the container (try: docker rm -f $CONTAINER)"
+}
+
+in_robot_container() {
+  robot_up
+  local tty=()
+  [ -t 0 ] && [ -t 1 ] && tty=(-it)
+  exec docker exec "${tty[@]}" -e AGOS_DOCKER=0 -e AGOS_PI_PORT="$PORT" \
+    -e AGOS_PI_MODEL="$(pi_model)" -e AGOS_PI_ADDRESSES="$(my_addresses)" \
+    "$CONTAINER" bash /agos_robot/agos_robot "$@"
+}
+
+# The micro-ROS agent: its own container, always running (it waits for the
+# ESP32, and Docker restarts it when the ESP32 is unplugged and plugged in)
+agent_up() {
+  inside_container && return 0
+  if ! command -v docker > /dev/null 2>&1 || ! docker info > /dev/null 2>&1; then
+    warn "Docker is not usable: no micro-ROS agent, so the motors will not move"
+    return 0
+  fi
+  local args
+  if [ "$ESP32" = wifi ]; then
+    args=(udp4 --port "$AGENT_UDP_PORT")
+  else
+    [ -e "$ESP32_DEV" ] || warn "No $ESP32_DEV: is the ESP32 plugged in, and ./agos_robot setup done? (the agent waits for it)"
+    args=(serial --dev "$ESP32_DEV" -b 115200)
+  fi
+  local want="$ESP32 $ESP32_DEV"
+  if docker container inspect "$AGENT_CONTAINER" > /dev/null 2>&1; then
+    if [ "$(docker container inspect -f '{{index .Config.Labels "agos_robot.agent"}}' "$AGENT_CONTAINER")" != "$want" ]; then
+      docker rm -f "$AGENT_CONTAINER" > /dev/null
+    fi
+  fi
+  if ! docker container inspect "$AGENT_CONTAINER" > /dev/null 2>&1; then
+    docker image inspect "$AGENT_IMAGE" > /dev/null 2>&1 || {
+      say "Downloading the micro-ROS agent ($AGENT_IMAGE)"
+      docker pull "$AGENT_IMAGE" || { warn "could not download $AGENT_IMAGE: no motors"; return 0; }
+    }
+    # UDP only (no shared memory): see uros_relay.py
+    docker run --name "$AGENT_CONTAINER" --detach --restart unless-stopped \
+      --label agos_robot.agent="$want" \
+      --network host --privileged --volume /dev:/dev \
+      --env FASTDDS_BUILTIN_TRANSPORTS=UDPv4 \
+      "$AGENT_IMAGE" "${args[@]}" -v4 > /dev/null || { warn "could not start the micro-ROS agent"; return 0; }
+  fi
+  docker start "$AGENT_CONTAINER" > /dev/null 2>&1
+  if [ "$ESP32" = wifi ]; then
+    say "micro-ROS agent running (Wi-Fi, UDP port $AGENT_UDP_PORT); ./agos_robot agent-log shows it"
+  else
+    say "micro-ROS agent running (USB, $ESP32_DEV); ./agos_robot agent-log shows it"
+  fi
+}
+
+agent_down() {
+  command -v docker > /dev/null 2>&1 && docker rm -f "$AGENT_CONTAINER" > /dev/null 2>&1
+  return 0
+}
+
+# ================================================================ ROS side
+
+ros_env() {
+  set +u
+  if [ -z "${AMENT_PREFIX_PATH:-}" ]; then
+    [ -f "/opt/ros/$DISTRO/setup.bash" ] || die "ROS 2 $DISTRO is not installed here"
+    source "/opt/ros/$DISTRO/setup.bash"
+  fi
+  # the C1 driver: built in the image, or by hand in ~/agos_ws (sensor guide)
+  local ws
+  for ws in /opt/agos_ws/install ~/agos_ws/install; do
+    if [ -f "$ws/setup.bash" ]; then source "$ws/setup.bash"; break; fi
+  done
+  export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+  export ZENOH_ROUTER_CHECK_ATTEMPTS="${ZENOH_ROUTER_CHECK_ATTEMPTS:-10}"
+  return 0
+}
+
+ros_start() {
+  ros_env
+  local p missing=()
+  for p in orbbec_camera sllidar_ros2 rtabmap_slam rtabmap_odom rtabmap_sync \
+           imu_filter_madgwick rmw_zenoh_cpp rmw_fastrtps_cpp robot_state_publisher; do
+    ros2 pkg prefix "$p" > /dev/null 2>&1 || missing+=("$p")
+  done
+  [ ${#missing[@]} -eq 0 ] || die "Missing ROS packages: ${missing[*]} (./agos_robot image rebuilds the image)"
+  pgrep -x rmw_zenohd > /dev/null 2>&1 && pkill -x rmw_zenohd
+  say "$(pi_model): robot starting. Laptop: $(laptop_hint)"
+  say "Stop with Ctrl+C (RTAB-Map saves the map to maps/rtabmap.db)"
+  exec ros2 launch "$DIR/robot.launch.py" port:="$PORT" "$@"
+}
+
+ros_status() {
+  ros_env
+  pgrep -x rmw_zenohd > /dev/null 2>&1 || die "The robot is not running (./agos_robot start)"
+  timeout 30 ros2 topic echo --once --timeout 20 --field data /agos_robot/status std_msgs/msg/String 2> /dev/null ||
+    die "No status within 20 s: is ./agos_robot start still starting?"
+}
+
+ros_check() {
+  local ok=0
+  say "Inside the container: ROS 2 $DISTRO"
+  ros_env
+  local p
+  for p in orbbec_camera sllidar_ros2 rtabmap_slam rtabmap_odom rtabmap_sync \
+           imu_filter_madgwick rmw_zenoh_cpp rmw_fastrtps_cpp; do
+    if ros2 pkg prefix "$p" > /dev/null 2>&1; then say "  $p: ok"; else warn "  $p: MISSING"; ok=1; fi
+  done
+  return $ok
+}
+
+# ================================================================ the Pi itself
+
+host_check() {
+  local ok=0
+  say "$(pi_model), $(uname -m), $(. /etc/os-release 2> /dev/null; echo "${PRETTY_NAME:-?}")"
+  [ "$(uname -m)" = aarch64 ] || warn "Not 64-bit ARM (aarch64): the ROS 2 images need a 64-bit OS"
+  # devices
+  if [ -e /dev/rplidar ]; then say "RPLiDAR C1: /dev/rplidar -> $(readlink -f /dev/rplidar)"
+  else warn "RPLiDAR C1: no /dev/rplidar (plugged in? ./agos_robot setup done?)"; ok=1; fi
+  if [ "$ESP32" = wifi ]; then say "ESP32: over Wi-Fi to UDP port $AGENT_UDP_PORT"
+  elif [ -e "$ESP32_DEV" ]; then say "ESP32-C3: $ESP32_DEV -> $(readlink -f "$ESP32_DEV")"
+  else warn "ESP32-C3: no $ESP32_DEV (plugged in with a data cable? flashed? setup done?)"; ok=1; fi
+  if command -v lsusb > /dev/null 2>&1; then
+    if lsusb -d 2bc5: > /dev/null 2>&1; then
+      say "Gemini 335: $(lsusb -d 2bc5: | head -n 1 | cut -d' ' -f6-)"
+      # the camera needs USB 3 (5000M) for 848x480 depth + colour
+      if lsusb -t 2> /dev/null | grep -i "video" | grep -q "5000M"; then
+        say "  on a USB 3 port (5000M)"
+      else
+        warn "  not seen on a 5000M port: use a blue USB 3 port, a USB 3 hub and cable (lsusb -t)"
+      fi
+    else
+      warn "Gemini 335: not on USB (powered USB 3 hub? cable?)"; ok=1
+    fi
+  fi
+  local usbfs
+  usbfs=$(cat /sys/module/usbcore/parameters/usbfs_memory_mb 2> /dev/null)
+  if [ "${usbfs:-0}" -ge 128 ] 2> /dev/null; then say "USB buffer: $usbfs MB"
+  else warn "USB buffer: ${usbfs:-?} MB (the camera needs 128: ./agos_robot setup)"; ok=1; fi
+  local t
+  t=$(cat /sys/devices/platform/soc/soc:firmware/get_throttled 2> /dev/null)
+  if command -v vcgencmd > /dev/null 2>&1; then t=$(vcgencmd get_throttled 2> /dev/null | cut -d= -f2); fi
+  case "$t" in
+    ""|0x0|0) say "Power and temperature: fine" ;;
+    *) warn "Throttled/under-voltage flags: $t (5.1 V 3 A supply? fan?)"; ok=1 ;;
+  esac
+  if command -v chronyc > /dev/null 2>&1; then
+    say "Clock: $(chronyc tracking 2> /dev/null | sed -n 's/^System time *: //p')"
+  else
+    warn "chrony not installed: the laptop and the Pi clocks must agree (./agos_robot setup <laptop-address>)"
+  fi
+  if command -v docker > /dev/null 2>&1 && docker info > /dev/null 2>&1; then
+    say "Docker: ok"
+    docker image inspect "$IMAGE" > /dev/null 2>&1 && say "  $IMAGE: built" ||
+      say "  $IMAGE: not built yet (./agos_robot start builds it)"
+    if docker container inspect -f '{{.State.Running}}' "$AGENT_CONTAINER" 2> /dev/null | grep -q true; then
+      say "  micro-ROS agent: running"
+    fi
+  else
+    warn "Docker: not usable (curl -fsSL https://get.docker.com | sh; sudo usermod -aG docker \$USER)"; ok=1
+  fi
+  say "This Pi's address(es): $(my_addresses)"
+  case " $(my_addresses) " in
+    *" $PI_TETHER "*)
+      if ping -c 1 -W 2 "$LAPTOP_TETHER" > /dev/null 2>&1; then say "Tether: the laptop answers at $LAPTOP_TETHER"
+      else warn "Tether: no answer from the laptop at $LAPTOP_TETHER (cable in? ./agos_laptop tether done there?)"; fi ;;
+    *) say "Tether: not set up (./agos_robot tether), or the cable is out" ;;
+  esac
+  say "On the laptop: $(laptop_hint)"
+  return $ok
+}
+
+# The Pi's clock follows the laptop's (chrony): Nav2 there uses the Pi's
+# timestamps. Internet time stays as a fallback.
+clock_from() {
+  local laptop="$1"
+  say "Clock: following the laptop at $laptop (chrony)"
+  command -v chronyc > /dev/null 2>&1 || sudo apt-get install -y chrony
+  if [ -d /etc/chrony/conf.d ]; then
+    echo "server $laptop iburst prefer" | sudo tee /etc/chrony/conf.d/agos.conf > /dev/null
+  else
+    sudo sed -i '/# AGOS laptop$/d' /etc/chrony/chrony.conf 2> /dev/null
+    echo "server $laptop iburst prefer # AGOS laptop" | sudo tee -a /etc/chrony/chrony.conf > /dev/null
+  fi
+  # step the clock at once if it is far off (a Pi without internet starts
+  # at the time it was last shut down)
+  sudo systemctl restart chrony 2> /dev/null || sudo systemctl restart chronyd
+  sudo chronyc makestep > /dev/null 2>&1
+  return 0
+}
+
+# A direct Ethernet cable to the laptop: the Pi is 10.77.0.2 on eth0, the
+# laptop 10.77.0.1 (./agos_laptop tether there). No gateway on the cable: the
+# Pi's Wi-Fi (if any) stays its way to the internet.
+host_tether() {
+  local ifname="${1:-eth0}"
+  [ -e "/sys/class/net/$ifname" ] || die "No network interface $ifname (ip link shows them)"
+  say "Ethernet tether on $ifname: this Pi is $PI_TETHER, the laptop $LAPTOP_TETHER"
+  if command -v nmcli > /dev/null 2>&1 && systemctl is-active --quiet NetworkManager; then
+    # Raspberry Pi OS Bookworm and later
+    sudo nmcli connection delete "$TETHER_CON" > /dev/null 2>&1
+    sudo nmcli connection add type ethernet ifname "$ifname" con-name "$TETHER_CON" \
+         ipv4.method manual ipv4.addresses "$PI_TETHER/24" ipv4.never-default yes \
+         ipv6.method link-local connection.autoconnect yes connection.autoconnect-priority 100 \
+         > /dev/null || die "nmcli could not add the connection"
+    sudo nmcli connection up "$TETHER_CON" > /dev/null 2>&1 ||
+      say "  (it comes up by itself when the cable is plugged in)"
+  elif [ -d /etc/netplan ]; then
+    # Ubuntu Server
+    printf 'network:\n  version: 2\n  ethernets:\n    %s:\n      dhcp4: false\n      optional: true\n      addresses: [%s/24]\n' \
+      "$ifname" "$PI_TETHER" | sudo tee /etc/netplan/60-agos-tether.yaml > /dev/null
+    sudo chmod 600 /etc/netplan/60-agos-tether.yaml
+    sudo netplan apply || die "netplan apply failed (see above)"
+  elif [ -f /etc/dhcpcd.conf ]; then
+    # older Raspberry Pi OS (Bullseye)
+    if ! grep -q "# AGOS tether" /etc/dhcpcd.conf; then
+      printf '\n# AGOS tether\ninterface %s\nstatic ip_address=%s/24\nnogateway\n' "$ifname" "$PI_TETHER" |
+        sudo tee -a /etc/dhcpcd.conf > /dev/null
+    fi
+    sudo systemctl restart dhcpcd
+  else
+    die "Neither NetworkManager, netplan nor dhcpcd found: give $ifname the address $PI_TETHER/24 by hand"
+  fi
+  clock_from "$LAPTOP_TETHER"
+  say "Done. With the cable in and ./agos_laptop tether done on the laptop: ./agos_robot check"
+}
+
+host_setup() {
+  local laptop="${1:-}"
+  say "udev rules: /dev/rplidar, /dev/esp32 and the Gemini 335 without root"
+  sudo cp "$DIR/udev/99-agos-robot.rules" "$DIR/udev/99-obsensor-libusb.rules" /etc/udev/rules.d/ &&
+    sudo udevadm control --reload-rules && sudo udevadm trigger
+  say "USB buffer 128 MB (Orbbec's advice), now and at every boot"
+  echo 128 | sudo tee /sys/module/usbcore/parameters/usbfs_memory_mb > /dev/null
+  local cmdline
+  for cmdline in /boot/firmware/cmdline.txt /boot/cmdline.txt; do
+    [ -f "$cmdline" ] || continue
+    if ! grep -q 'usbcore.usbfs_memory_mb=' "$cmdline"; then
+      sudo sed -i '1 s/$/ usbcore.usbfs_memory_mb=128/' "$cmdline"
+    fi
+    break
+  done
+  if [ -n "$laptop" ]; then
+    clock_from "$laptop"
+  else
+    say "No laptop address given: the clock comes from the internet (./agos_robot tether, or"
+    say "  ./agos_robot setup <laptop-address>, makes the laptop the clock)"
+  fi
+  if command -v docker > /dev/null 2>&1; then
+    docker info > /dev/null 2>&1 && docker pull "$AGENT_IMAGE"
+  else
+    warn "Docker is not installed: curl -fsSL https://get.docker.com | sh; sudo usermod -aG docker \$USER; sudo reboot"
+  fi
+  say "Done. Unplug and plug in the C1 and the ESP32, then: ./agos_robot check"
+}
+
+# ================================================================ commands
+
+cmd="${1:-help}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+  help|-h|--help) usage; exit 0 ;;
+  setup) host_setup "$@"; exit $? ;;
+  tether) host_tether "$@"; exit $? ;;
+  agent-log) exec docker logs -f "$AGENT_CONTAINER" ;;
+  stats)
+    exec python3 "$DIR/robot_monitor.py" --summary "${1:-last}" ;;
+esac
+
+if ! inside_container; then
+  case "$cmd" in
+    check)
+      host_check; host_ok=$?
+      if use_docker; then
+        docker_ok; robot_image; robot_up
+        docker exec "$CONTAINER" bash /agos_robot/agos_robot check-ros || host_ok=1
+      else
+        ros_check || host_ok=1
+      fi
+      exit $host_ok ;;
+    stop)
+      if use_docker; then
+        docker exec "$CONTAINER" pkill -INT -f "ros2 launch" 2> /dev/null
+        sleep 5
+        docker exec "$CONTAINER" pkill -KILL -f "rtabmap|rmw_zenohd|orbbec|sllidar" 2> /dev/null
+      else
+        pkill -INT -f "ros2 launch $DIR/robot.launch.py" 2> /dev/null
+      fi
+      agent_down
+      say "Stopped"
+      exit 0 ;;
+    image) docker_ok; robot_image --rebuild; docker rm -f "$CONTAINER" > /dev/null 2>&1; exit 0 ;;
+    start) agent_up ;;
+  esac
+  if use_docker; then
+    in_robot_container "$cmd" "$@"
+  fi
+fi
+
+case "$cmd" in
+  start) ros_start "$@" ;;
+  status) ros_status ;;
+  motor-test) ros_env; exec python3 "$DIR/motor_test.py" "$@" ;;
+  check-ros) ros_check ;;
+  check) host_check; ros_check ;;
+  shell)
+    ros_env
+    say "ROS 2 $DISTRO through Zenoh (exit to leave)"
+    exec bash -i ;;
+  ros2) ros_env; exec ros2 "$@" ;;
+  *) warn "Unknown command: $cmd"; usage; exit 1 ;;
+esac

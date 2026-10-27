@@ -1,0 +1,9 @@
+# AGOS test robot: fixed names for the USB devices, readable without root.
+# ./agos_robot setup copies this file and 99-obsensor-libusb.rules (Orbbec's
+# own, for the Gemini 335) to /etc/udev/rules.d/.
+
+# RPLiDAR C1 (its USB adapter is a Silicon Labs CP210x) -> /dev/rplidar
+KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE:="0666", SYMLINK+="rplidar"
+
+# ESP32-C3's built-in USB (USB Serial/JTAG) -> /dev/esp32
+KERNEL=="ttyACM*", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE:="0666", SYMLINK+="esp32"

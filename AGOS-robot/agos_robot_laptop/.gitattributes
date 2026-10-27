@@ -1,0 +1,9 @@
+# Scripts must keep Unix line endings even when Git on Windows converts the
+# rest to CRLF, or bash stops with "$'\r': command not found".
+agos_laptop text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+Dockerfile text eol=lf
+
+*.npz binary
+*.cmd text eol=crlf

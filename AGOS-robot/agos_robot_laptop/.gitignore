@@ -1,0 +1,8 @@
+# Made by colcon and ./agos_laptop, not source files
+build/
+install/
+log/
+missions/
+__pycache__/
+*.pyc
+.robot_address

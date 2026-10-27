@@ -19,6 +19,8 @@
 #   ./agos start world:=agos_sewer.sdf          (the smaller sewer)
 #   ./agos explore leg_length:=15.0
 #   ./agos start localization:=true             (reuse the last map)
+#   ./agos explore slam:=remote slam_host:=192.168.1.42
+#                                               (RTAB-Map on a Raspberry Pi: agos_pi_slam)
 #
 # Where it runs: if ROS 2 is installed (/opt/ros/<distro>), here. If not,
 # and Docker is, inside the "agos" container (made from docker/Dockerfile
@@ -131,9 +133,15 @@ docker_up() {
 
 in_docker() {
   docker_up
-  local tty=()
+  local tty=() env=() v
   [ -t 0 ] && [ -t 1 ] && tty=(-it)
-  exec docker exec "${tty[@]}" -e AGOS_DOCKER=0 "$CONTAINER" bash /ws/agos "$@"
+  # ROS network settings set in this shell (RMW_IMPLEMENTATION=rmw_zenoh_cpp
+  # ./agos mission, ...) reach the command in the container too
+  for v in RMW_IMPLEMENTATION ROS_DOMAIN_ID ROS_AUTOMATIC_DISCOVERY_RANGE ROS_STATIC_PEERS \
+           ZENOH_CONFIG_OVERRIDE ZENOH_ROUTER_CHECK_ATTEMPTS ZENOH_SESSION_CONFIG_URI RUST_LOG; do
+    [ -n "${!v:-}" ] && env+=(-e "$v=${!v}")
+  done
+  exec docker exec "${tty[@]}" "${env[@]}" -e AGOS_DOCKER=0 "$CONTAINER" bash /ws/agos "$@"
 }
 
 # ----------------------------------------------------------------- ROS side
@@ -159,6 +167,41 @@ ros_env() {
   # Qt (RViz) wants this folder to exist
   if [ -n "${XDG_RUNTIME_DIR:-}" ]; then mkdir -p -m 700 "$XDG_RUNTIME_DIR" 2> /dev/null; fi
   gpu_env
+  # A simulation with slam:=remote talks through Zenoh (its router is
+  # rmw_zenohd): so must ./agos mission, teleop or ros2 next to it.
+  if [ -z "${RMW_IMPLEMENTATION:-}" ] && pgrep -x rmw_zenohd > /dev/null 2>&1; then
+    export RMW_IMPLEMENTATION=rmw_zenoh_cpp AGOS_ZENOH_AUTO=1
+  fi
+  return 0
+}
+
+# slam:=remote (RTAB-Map on a Raspberry Pi): everything talks through Zenoh
+remote_slam() {
+  local a
+  for a in "$@"; do
+    [ "$a" = "slam:=remote" ] && return 0
+  done
+  return 1
+}
+
+zenoh_env() {
+  if remote_slam "$@"; then
+    export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+    # nodes wait up to 10 s for the router the launch starts next to them
+    export ZENOH_ROUTER_CHECK_ATTEMPTS="${ZENOH_ROUTER_CHECK_ATTEMPTS:-10}"
+    ros2 pkg prefix rmw_zenoh_cpp > /dev/null 2>&1 || {
+      if [ -f /.dockerenv ]; then
+        die "slam:=remote needs Zenoh (rmw_zenoh_cpp), which this Docker image does not have yet. Outside the container run: ./agos image, then ./agos reset"
+      fi
+      die "slam:=remote needs Zenoh: sudo apt install ros-$ROS_DISTRO-rmw-zenoh-cpp"
+    }
+    pgrep -x rmw_zenohd > /dev/null 2>&1 && pkill -x rmw_zenohd   # one left over
+    say "SLAM runs on the Raspberry Pi; talking to it through Zenoh"
+  else
+    # a Zenoh router left over from a remote run must not switch this one
+    if [ "${AGOS_ZENOH_AUTO:-}" = 1 ]; then unset RMW_IMPLEMENTATION AGOS_ZENOH_AUTO; fi
+    pkill -x rmw_zenohd 2> /dev/null
+  fi
   return 0
 }
 
@@ -251,6 +294,7 @@ launch() {
     stop_all
   fi
   ensure_built
+  zenoh_env "$@"
   graphics_check
   export AGOS_MISSION_DIR="${AGOS_MISSION_DIR:-$WS/missions}"
   say "Starting: ros2 launch $PKG agos.launch.py $*"
@@ -264,7 +308,7 @@ SIM_PROCESSES=("ros2 launch $PKG" "$PKG/explorer" "$PKG/nav_supervisor" "$PKG/od
                "gz sim" "rviz2" "rtabmap" "parameter_bridge" "robot_state_publisher"
                "ekf_node" "controller_server" "planner_server" "smoother_server"
                "behavior_server" "bt_navigator" "waypoint_follower" "velocity_smoother"
-               "lifecycle_manager")
+               "lifecycle_manager" "rgbd_sync" "rmw_zenohd")
 
 # The AGOS-specific ones: is a simulation (or what is left of one) running?
 sim_running() {
@@ -305,7 +349,8 @@ check() {
            nav2_velocity_smoother nav2_lifecycle_manager nav2_rviz_plugins; do
     case "$have" in *" $p "*) ;; *) missing+=("$p") ;; esac
   done
-  for p in rtabmap_viz teleop_twist_keyboard; do      # only for rtabmap_viz:=true / ./agos teleop
+  # only for rtabmap_viz:=true / ./agos teleop / slam:=remote (RTAB-Map on a Raspberry Pi)
+  for p in rtabmap_viz teleop_twist_keyboard rmw_zenoh_cpp; do
     case "$have" in *" $p "*) ;; *) optional+=("$p") ;; esac
   done
   if [ ${#missing[@]} -gt 0 ]; then

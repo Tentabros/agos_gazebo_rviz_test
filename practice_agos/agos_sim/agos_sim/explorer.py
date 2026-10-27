@@ -51,10 +51,35 @@ drives back to the start and writes the report (frontiers.py, WholeMap):
     ros2 service call /explore/start std_srvs/srv/Trigger  # when autostart:=false
     ros2 service call /explore/stop std_srvs/srv/Trigger   # stop and write the report
 
+Forwards into new pipe (NAV_ALGORITHMS.md): the camera looks ahead and the
+robot can only turn round in a manhole, so it drives to a frontier forwards
+and reverses only over pipe it has already mapped. For each frontier,
+Snapshot.approach (frontiers.py) says how: drive on if the route leaves
+ahead of the robot; else turn on the spot if it is in a manhole; else back
+up along the route to the first manhole on it and turn there; else drive on
+to a manhole ahead, turn and come back. The turns count in the cost of
+each frontier, and a frontier it could only reach in reverse is not chosen.
+Every goal goes to Nav2 with one of two planner and controller pairs
+(config/nav2_agos.yaml), published on /planner_selector and
+/controller_selector:
+
+    forwards  Hybrid-A* (GridBased) + MPPI that never reverses (FollowPath)
+    reverse   Smac 2D through mapped space only (Mapped) + MPPI that may
+              reverse (Reverse): back to a manhole to turn, and goals in
+              mapped pipe behind the robot (the leg end, the start)
+
+In full mode the next frontier is the first of the shortest tour through
+all of them and back to the start (frontiers.py, plan_tour), TAD deciding
+between first stops whose tours are within `reach` m of the best. The
+report has the network as a graph (manholes and the pipes between them,
+frontiers.py PipeGraph) and how far the robot reversed. forward_only:=false
+and tour:=false give the earlier behaviour, for comparison.
+
 RViz: the Explorer display shows the frontiers (green: in this leg, or that
 may be chosen; grey: not), the TAD score of each, the current goal (yellow;
-orange: the next step on the way to it) and the path driven.
-/explore/status says what it is doing.
+orange: the next step on the way to it), the path driven, the manholes
+(blue), the pipes between them (purple) and, in full mode, the tour
+(magenta). /explore/status says what it is doing.
 """
 import csv
 import datetime
@@ -65,7 +90,7 @@ import time
 import zlib
 
 from action_msgs.msg import GoalStatus
-from agos_sim.frontiers import Grid, Snapshot, WholeMap
+from agos_sim.frontiers import Grid, PipeGraph, Snapshot, WholeMap
 from geometry_msgs.msg import Point
 from nav2_msgs.action import BackUp, NavigateToPose, Spin
 from nav2_msgs.srv import ClearEntireCostmap
@@ -83,8 +108,18 @@ from std_srvs.srv import Trigger
 import tf2_ros
 from visualization_msgs.msg import Marker, MarkerArray
 
-WAITING, EXPLORING, TO_LEG_END, RETURNING, TURNING, RECOVERING, DONE = (
-    'waiting', 'exploring', 'to leg end', 'returning', 'turning round', 'recovering', 'done')
+WAITING, EXPLORING, TO_LEG_END, RETURNING, TURNING, RECOVERING, REPOSITIONING, DONE = (
+    'waiting', 'exploring', 'to leg end', 'returning', 'turning round', 'recovering',
+    'to a manhole to turn', 'done')
+
+# How the robot drives to a goal: (controller, planner) in config/nav2_agos.yaml
+DRIVE = {
+    'forward': ('FollowPath', 'GridBased'),     # Hybrid-A* + MPPI that never reverses
+    'reverse': ('Reverse', 'Mapped'),           # mapped space only + MPPI that may reverse
+    'either': ('Reverse', 'GridBased2D'),       # forward_only:=false: as before
+}
+SELECT_WAIT = 0.5   # s between choosing the planner and controller and sending a goal
+GRAPH_EVERY = 10.0  # s between updates of the pipe network markers
 
 HOP_LEAD = 3.0      # m (full mode): send the next step of a long drive this far before the last
 # Nav2 errors that say nothing about the goal: the map -> odom transform came
@@ -103,6 +138,7 @@ START_OCCUPIED = 205
 # is driving to and for pipes it left for later; the report lists the others.
 NEAR_TRAIL = 2.5    # m
 NEAR_TRAIL_WHY = 'next to the path driven (most likely a wall the map drew twice)'
+REVERSE_ONLY_WHY = 'only reachable in reverse (nowhere to turn round on the way)'
 # After the robot gets to a frontier, RTAB-Map adds what the LiDAR sees from
 # there at its next map update (once a second). Choosing before that, a
 # frontier round a bend still looks like a dead end where the robot stands.
@@ -154,6 +190,8 @@ class Explorer(Node):
         p('hop_length', 8.0)             # m: longer drives go in steps of this
         p('look_round', True)            # turn once round in the start manhole first
         p('map_path_topic', '/mapPath')  # RTAB-Map's map nodes: where the robot has been
+        p('tour', True)                  # full mode: next = first of the best tour (plan_tour)
+        p('forward_only', True)          # into new pipe forwards only; reverse over mapped pipe
         p('autostart', True)             # start as soon as Nav2 and the map are up
         p('report_dir', os.environ.get('AGOS_MISSION_DIR', '~/agos_missions'))
         p('global_frame', 'map')
@@ -182,6 +220,8 @@ class Explorer(Node):
         self.peek = float(prm('peek').value)
         self.hop_length = float(prm('hop_length').value)
         self.look_round = bool(prm('look_round').value)
+        self.tour = bool(prm('tour').value)
+        self.forward_only = bool(prm('forward_only').value)
         self.autostart = bool(prm('autostart').value)
         self.report_dir = os.path.expanduser(prm('report_dir').value)
         self.global_frame = prm('global_frame').value
@@ -195,6 +235,10 @@ class Explorer(Node):
             self.create_subscription(Path, prm('map_path_topic').value, self.on_map_path, 1)
         self.markers_pub = self.create_publisher(MarkerArray, '/explore/markers', latched)
         self.status_pub = self.create_publisher(String, '/explore/status', latched)
+        # (the behaviour tree's selector nodes take the latest, latched)
+        self.controller_pub = self.create_publisher(String, '/controller_selector', latched)
+        self.planner_pub = self.create_publisher(String, '/planner_selector', latched)
+        self.drive_mode = None
         self.create_service(Trigger, '/explore/start', self.srv_start)
         self.create_service(Trigger, '/explore/stop', self.srv_stop)
 
@@ -237,6 +281,16 @@ class Explorer(Node):
         self.goal_handle = None
         self.goal_info = ''
         self.goal_facing = 0.0
+        self.goal_mode = 'forward'     # how Nav2 drives there (DRIVE)
+        self.pending = None            # (kind, xy, info, facing, state): goal after a turn
+        self.turn_for = None           # why the robot is turning: 'start', 'leg' or 'approach'
+        self.turns = 0                 # turns on the spot to face a pipe before driving into it
+        self.reverse_total = 0.0       # m driven backwards (add_driven)
+        self.reverse_spot = 0.0        # ... of that, back to a manhole to turn
+        self.reverse_frontier = 0.0    # ... and on the way to a frontier
+        self.reverse_only = []         # frontiers it could have reached only in reverse
+        self.graph = None              # PipeGraph of the map (markers and report)
+        self.graph_time = None
         self.transient_since = None    # first of the TRANSIENT_ERRORS in a row
         self.transient_last = None     # and the last
         self.resend_at = None          # when to send the goal again after one of them
@@ -262,7 +316,8 @@ class Explorer(Node):
         self.last_frontiers = []
         self.near_trail = []           # full mode: frontiers left beside the path (NEAR_TRAIL)
         self.last_snapshot = None
-        self.chooser = WholeMap(self.reach, self.hold_radius, self.peek)   # full mode
+        self.chooser = WholeMap(self.reach, self.hold_radius, self.peek,   # full mode
+                                tour=self.tour)
         self.retried = False           # full mode: unreachable frontiers tried again
 
     def now_s(self):
@@ -327,10 +382,18 @@ class Explorer(Node):
         if self.last_odom is None:
             self.last_odom = (x, y)
             return
-        step = math.hypot(x - self.last_odom[0], y - self.last_odom[1])
+        dx, dy = x - self.last_odom[0], y - self.last_odom[1]
+        step = math.hypot(dx, dy)
         if step > 0.05:
             self.distance += step
             self.last_odom = (x, y)
+            yaw = yaw_of(t.transform.rotation)
+            if dx * math.cos(yaw) + dy * math.sin(yaw) < 0.0:      # backwards
+                self.reverse_total += step
+                if self.state == REPOSITIONING:
+                    self.reverse_spot += step
+                elif self.state == EXPLORING and self.goal_kind == 'frontier':
+                    self.reverse_frontier += step
 
     def leg_bearing(self):
         return wrap(self.start[2] + self.legs[self.leg])
@@ -391,7 +454,8 @@ class Explorer(Node):
             # after one of the TRANSIENT_ERRORS or START_OCCUPIED (a new
             # choice below replaces it)
             self.send_goal(self.goal, self.goal_kind, self.goal_info, facing=self.goal_facing,
-                           target=self.target if self.hop else None, fresh=False)
+                           target=self.target if self.hop else None, fresh=False,
+                           mode=self.goal_mode)
         if self.arrived is not None and t - self.arrived < SETTLE and self.state == EXPLORING:
             self.publish_markers()
             return
@@ -404,8 +468,15 @@ class Explorer(Node):
                 self.explore(pose)
         elif self.state == RETURNING and self.full:
             self.return_full(pose)
-        # TO_LEG_END, RETURNING, TURNING and RECOVERING advance in the action callbacks
-        # (in full mode RETURNING also goes on here, one step of the route at a time)
+        elif self.state == REPOSITIONING and self.full and self.hop:
+            self.keep_driving(self.snapshot(pose), pose)
+        # TO_LEG_END, RETURNING, TURNING, REPOSITIONING and RECOVERING advance in the
+        # action callbacks (in full mode RETURNING and REPOSITIONING also go on here,
+        # one step of the route at a time)
+        if self.last_snapshot is not None and (self.graph_time is None
+                                               or t - self.graph_time >= GRAPH_EVERY):
+            self.graph_time = t
+            self.graph = PipeGraph(self.last_snapshot)
         self.publish_markers()
         self.set_status('%s, %s%s' % (self.state, self.leg_name(),
                                       (', goal ' + self.goal_info) if self.goal_active else ''))
@@ -422,6 +493,7 @@ class Explorer(Node):
             self.set_status('waiting for the map and the robot position')
             return
         self.start = pose
+        self.chooser.home = (pose[0], pose[1])
         self.mission_start_time = self.now_s()
         self.leg = 0
         self.state = EXPLORING
@@ -439,6 +511,7 @@ class Explorer(Node):
             # it reversed through), and the start then looks new: the loop is
             # not closed and the map stays off by the odometry's drift.
             self.state = TURNING
+            self.turn_for = 'start'
             self.log('Turning once round in the manhole first, so that RTAB-Map knows it '
                      'from every side when the robot comes back')
             self.send_spin(2.0 * math.pi)
@@ -488,7 +561,8 @@ class Explorer(Node):
         snap = Snapshot(grid, (pose[0], pose[1]),
                         None if self.full else (self.start[0], self.start[1]),
                         clearance=self.clearance, exit_radius=self.exit_radius,
-                        driven=self.driven(pose) if self.full else None)
+                        driven=self.driven(pose) if self.full else None,
+                        robot_yaw=pose[2] if self.forward_only else None)
         self.last_snapshot = snap
         return snap
 
@@ -515,6 +589,8 @@ class Explorer(Node):
                   and not self.near(f.goal, self.blacklist, self.skip_radius)
                   and not self.near(f.goal, self.reached, self.reached_radius)
                   and not self.near(f.goal, passed, self.passed_radius)]
+        self.reverse_only = [f for f in in_leg if not math.isfinite(f.travel)]
+        in_leg = [f for f in in_leg if math.isfinite(f.travel)]
         self.last_frontiers = [(f, f in in_leg) for f in frontiers]
         stats = self.leg_stats[-1]
         stats['explored'] = max(stats['explored'], min(
@@ -530,7 +606,7 @@ class Explorer(Node):
                 return       # mapped; let the robot finish this goal, then go to the leg end
 
         if in_leg:
-            self.send_frontier(max(in_leg, key=lambda f: f.score), pose)
+            self.send_frontier(max(in_leg, key=lambda f: f.score), pose, snap)
             return
         if self.goal_active:
             return
@@ -541,7 +617,11 @@ class Explorer(Node):
             self.log('%s explored (%.1f m along the pipe); driving to its far end (%.2f, %.2f)'
                      % (self.leg_name().capitalize(), stats['explored'], end[0][0], end[0][1]))
             self.state = TO_LEG_END
-            self.send_goal(end[0], 'leg end', 'leg end (%.2f, %.2f)' % end[0])
+            # (mapped pipe: forwards if it is ahead, else it may reverse there)
+            cell = snap.snap(end[0])
+            ahead = cell is None or snap.approach(cell)[1] == 'ahead'
+            self.send_goal(end[0], 'leg end', 'leg end (%.2f, %.2f)' % end[0],
+                           mode='forward' if ahead else 'reverse')
         else:
             if end is None:
                 stats['note'] = 'no pipe in this direction'
@@ -598,11 +678,83 @@ class Explorer(Node):
         self.log('Goal: ' + info)
         self.leg_stats[-1]['sent'] += 1
         facing = math.atan2(f.goal[1] - pose[1], f.goal[0] - pose[0])
-        if self.full:
+        if f.how != 'ahead' and snap is not None:
+            # it faces the wrong way: turn round first (Snapshot.approach)
+            self.reposition(f.how, f.spot, ('frontier', f.goal, info, facing, EXPLORING),
+                            snap, pose)
+        elif self.full:
             # (a new choice restarts the stuck timer; following the same pipe does not)
             self.drive_to(snap, f.goal, 'frontier', info, facing, fresh=self.target is None)
         else:
             self.send_goal(f.goal, 'frontier', info, facing=facing)
+
+    def reposition(self, how, spot, pending, snap, pose):
+        """
+        Turn round before driving to a goal forwards (Snapshot.approach).
+
+        how 'turn': turn on the spot now; 'back': reverse to the manhole at
+        `spot` (over mapped pipe) and turn there; 'loop': drive on to the
+        manhole at `spot` and turn there. Then the robot drives to the goal
+        in `pending` (kind, xy, info, facing, state to go on in).
+        """
+        self.cancel_goal()
+        self.pending = pending
+        if how == 'turn':
+            self.turn_to_route(snap, pose)
+            return
+        self.log('%s to the manhole at %s to turn round there first'
+                 % ('Backing up' if how == 'back' else 'Driving on', fmt_xy(spot)))
+        self.state = REPOSITIONING
+        self.drive_to(snap, spot, 'turn spot', 'manhole ' + fmt_xy(spot),
+                      mode='reverse' if how == 'back' else 'forward')
+
+    def turn_to_route(self, snap, pose):
+        """Turn on the spot to face the route to the pending goal, then go on (resume)."""
+        cell = snap.snap(self.pending[1]) if snap is not None and pose is not None else None
+        path = snap.route(cell) if cell else None
+        bearing = snap.leaving(path) if path else None
+        angle = wrap(bearing - pose[2]) if bearing is not None else 0.0
+        if abs(angle) < math.radians(20):
+            self.resume()
+            return
+        self.turns += 1
+        self.state = TURNING
+        self.turn_for = 'approach'
+        self.log('Turning %.0f deg to face the pipe to %s'
+                 % (math.degrees(angle), self.pending[2]))
+        self.send_spin(angle)
+
+    def resume(self):
+        """Drive to the goal the robot turned round for, forwards."""
+        if self.pending is None:
+            self.state = EXPLORING
+            return
+        kind, xy, info, facing, state = self.pending
+        self.pending = None
+        self.state = state
+        pose = self.robot_pose()
+        snap = self.snapshot(pose) if pose is not None and self.map_msg is not None else None
+        self.drive_to(snap, xy, kind, info, facing)
+
+    def pending_failed(self, pending):
+        """Give up on a goal when the robot could not get to the manhole to turn round in."""
+        if pending is None:
+            self.state = EXPLORING
+            return
+        kind, xy, info = pending[0], pending[1], pending[2]
+        if kind == 'home':
+            # back over the mapped pipes as it is, then
+            self.log('Could not turn round on the way: going back to the start as it is',
+                     warn=True)
+            self.state = RETURNING
+            self.drive_to(self.last_snapshot, xy, 'home', info, pending[3], mode='reverse')
+            return
+        self.blacklist.append(xy)
+        self.leg_stats[-1]['failed'] += 1
+        self.log('Could not get to a manhole to turn round for ' + info, warn=True)
+        self.state = EXPLORING
+        if self.full:
+            self.target, self.hop = None, False      # choose again
 
     def go_home(self, snap=None):
         stats = self.leg_stats[-1]
@@ -612,11 +764,25 @@ class Explorer(Node):
         self.home_failures = 0
         self.log('Returning to the start ' + fmt_xy(self.start))
         if self.full:
-            self.drive_to(snap, self.start[:2], 'home', 'start ' + fmt_xy(self.start),
-                          self.start[2])
+            self.head_home(snap, self.robot_pose())
         else:
+            # the proposal's mission: back down the leg (mapped), then turn in the manhole
             self.send_goal(self.start[:2], 'home', 'start ' + fmt_xy(self.start),
-                           facing=self.start[2])
+                           facing=self.start[2], mode='reverse')
+
+    def head_home(self, snap, pose):
+        """Drive back to the start, forwards where it can turn round first (full mode)."""
+        info = 'start ' + fmt_xy(self.start)
+        cell = snap.snap(self.start[:2]) if snap is not None else None
+        how, spot = (snap.approach(cell)[1:] if cell is not None and pose is not None
+                     else ('ahead', None))
+        if how in ('turn', 'back', 'loop'):
+            self.reposition(how, spot, ('home', self.start[:2], info, self.start[2], RETURNING),
+                            snap, pose)
+        else:
+            # ahead, or (nowhere to turn) back over the mapped pipes
+            self.drive_to(snap, self.start[:2], 'home', info, self.start[2],
+                          mode='forward' if how == 'ahead' else 'reverse')
 
     # ------------------------------------------------------------ full mode
 
@@ -626,6 +792,9 @@ class Explorer(Node):
         frontiers = snap.frontiers(self.min_size)
         passed = self.passed(pose)
         choosable = [f for f in frontiers if not self.skipped(f, passed)]
+        # (only reachable in reverse: nowhere to turn round on the way)
+        self.reverse_only = [f for f in choosable if not math.isfinite(f.travel)]
+        choosable = [f for f in choosable if math.isfinite(f.travel)]
         chooser = self.chooser
         chooser.target = self.target if self.goal_kind == 'frontier' else None
         self.near_trail = [f for f in choosable if self.near(f.goal, passed, NEAR_TRAIL)
@@ -655,22 +824,23 @@ class Explorer(Node):
         self.log('No frontier left: the whole map is explored')
         self.go_home(snap)
 
-    def drive_to(self, snap, xy, kind, info, facing=0.0, fresh=True):
+    def drive_to(self, snap, xy, kind, info, facing=0.0, fresh=True, mode='forward'):
         """
         Send the robot to xy, in steps of hop_length m along the route (full mode).
 
         Nav2's global costmap is a 50 x 50 m window round the robot, so it
         cannot plan to a goal further away; and its planner may take a short
         cut through unmapped space, where this route keeps to mapped pipe.
+        (Legs mode: in one go; no leg is longer than the window.)
         """
         goal, target = xy, None
-        cell = snap.snap(xy) if snap is not None else None
+        cell = snap.snap(xy) if snap is not None and self.full else None
         if cell is not None:
             step = snap.waypoint(cell, self.hop_length)
             if step is not None:
                 goal, target = step, xy
         self.target_facing = facing
-        self.send_goal(goal, kind, info, facing=facing, target=target, fresh=fresh)
+        self.send_goal(goal, kind, info, facing=facing, target=target, fresh=fresh, mode=mode)
 
     def keep_driving(self, snap, pose):
         """Send the next step of a long drive when the robot is nearly at the last one."""
@@ -680,7 +850,7 @@ class Explorer(Node):
                 math.hypot(self.goal[0] - pose[0], self.goal[1] - pose[1]) > HOP_LEAD:
             return
         self.drive_to(snap, self.target, self.goal_kind, self.goal_info, self.target_facing,
-                      fresh=False)
+                      fresh=False, mode=self.goal_mode)
 
     def return_full(self, pose):
         """Drive back to the start along the mapped pipes (full mode)."""
@@ -688,8 +858,7 @@ class Explorer(Node):
         if self.goal_active:
             self.keep_driving(snap, pose)
         else:
-            self.drive_to(snap, self.start[:2], 'home', 'start ' + fmt_xy(self.start),
-                          self.start[2], fresh=False)
+            self.head_home(snap, pose)
 
     def leftover(self):
         """Frontiers still in the map when the mission ended (full mode): [((x, y), why)]."""
@@ -699,6 +868,8 @@ class Explorer(Node):
                 why = 'not explored'
             elif f in self.near_trail:
                 why = NEAR_TRAIL_WHY
+            elif f in self.reverse_only:
+                why = REVERSE_ONLY_WHY
             elif self.near(f.goal, self.blacklist, self.skip_radius):
                 why = 'could not be reached'
             elif self.near(f.goal, self.reached, self.reached_radius):
@@ -717,6 +888,7 @@ class Explorer(Node):
         turn = wrap(self.leg_bearing() - (pose[2] if pose else self.start[2]))
         if self.turn_around and abs(turn) > math.radians(20):
             self.state = TURNING
+            self.turn_for = 'leg'
             self.log('Turning %.0f deg in the manhole' % math.degrees(turn))
             self.send_spin(turn)
         else:
@@ -725,17 +897,32 @@ class Explorer(Node):
 
     # ------------------------------------------------------------ Nav2 actions
 
-    def send_goal(self, xy, kind, info, facing=0.0, target=None, fresh=True):
+    def select(self, mode):
+        """Choose Nav2's planner and controller (DRIVE[mode]); True if that changed them."""
+        if mode == self.drive_mode:
+            return False
+        controller, planner = DRIVE[mode]
+        self.controller_pub.publish(String(data=controller))
+        self.planner_pub.publish(String(data=planner))
+        self.drive_mode = mode
+        return True
+
+    def send_goal(self, xy, kind, info, facing=0.0, target=None, fresh=True, mode='forward'):
         """
         Send a NavigateToPose goal.
 
         target: where the robot is really going, when xy is only a step on
-        the way (full mode). fresh: restart the stuck timer.
+        the way (full mode). fresh: restart the stuck timer. mode: how Nav2
+        drives there (DRIVE): 'forward' into new pipe, 'reverse' where it
+        may back up over mapped pipe.
         """
         self.resend_at = None
+        if not self.forward_only:
+            mode = 'either'
         if not self.nav.server_is_ready():
             self.log('Nav2 navigate_to_pose is not available', warn=True)
             return
+        changed = self.select(mode)
         goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = self.global_frame
         goal.pose.header.stamp = Time().to_msg()     # 0 = the latest (see now_s)
@@ -751,11 +938,17 @@ class Explorer(Node):
         self.goal_kind = kind
         self.goal_info = info
         self.goal_facing = facing
+        self.goal_mode = mode
         self.goal_active = True
         self.goal_handle = None
         if fresh or self.progress_time is None:
             self.progress_time = self.now_s()
             self.progress_pose = None        # (set at the next check_stuck)
+        if changed:
+            # let the behaviour tree take the new planner and controller
+            # first: step() sends the goal a moment later
+            self.resend_at = self.now_s() + SELECT_WAIT
+            return
         future = self.nav.send_goal_async(goal)
         future.add_done_callback(lambda fut: self.on_goal_response(fut, seq))
 
@@ -843,6 +1036,14 @@ class Explorer(Node):
                     self.recover(EXPLORING)
             if self.full:
                 self.target, self.hop = None, False      # choose again
+        elif kind == 'turn spot':
+            if ok:
+                pose = self.robot_pose()
+                snap = self.snapshot(pose) if pose is not None else None
+                self.turn_to_route(snap, pose)
+            else:
+                pending, self.pending = self.pending, None
+                self.pending_failed(pending)
         elif kind == 'leg end':
             if not ok:
                 self.log('Could not reach the leg end; returning from here', warn=True)
@@ -908,6 +1109,11 @@ class Explorer(Node):
             self.recover(EXPLORING)
         elif kind == 'leg end':
             self.go_home()
+        elif kind == 'turn spot':
+            pending, self.pending = self.pending, None
+            self.pending_failed(pending)
+            if self.state == EXPLORING:
+                self.recover(EXPLORING)
         else:
             self.home_failures += 1
             if self.home_failures >= 3:
@@ -952,12 +1158,11 @@ class Explorer(Node):
             self.resend_at = self.now_s()      # step() sends the goal again
         elif self.state == RETURNING and not self.full:   # (full mode: return_full goes on)
             self.send_goal(self.start[:2], 'home', 'start ' + fmt_xy(self.start),
-                           facing=self.start[2])
+                           facing=self.start[2], mode='reverse')
 
     def send_spin(self, angle):
         if not self.spin_ac.server_is_ready():
-            self.state = EXPLORING
-            self.begin_leg()
+            self.spun(GoalStatus.STATUS_ABORTED)
             return
         goal = Spin.Goal()
         goal.target_yaw = float(angle)
@@ -976,6 +1181,12 @@ class Explorer(Node):
 
     def spun(self, status):
         if self.state != TURNING:
+            return
+        why, self.turn_for = self.turn_for, None
+        if why == 'approach':
+            if status != GoalStatus.STATUS_SUCCEEDED:
+                self.log('Could not turn fully; going on anyway', warn=True)
+            self.resume()
             return
         if status != GoalStatus.STATUS_SUCCEEDED:
             self.log('Could not turn round fully; exploring %s anyway'
@@ -1040,6 +1251,26 @@ class Explorer(Node):
                                   y=self.start[1] + 1.5 * math.sin(b), z=0.1)]
                 m.scale.y, m.scale.z = 0.2, 0.2
                 markers.markers.append(m)
+        graph = self.graph
+        if graph is not None and graph.nodes:
+            m = marker('manholes', 0, Marker.CUBE_LIST, (0.2, 0.4, 1.0, 0.6), 0.5)
+            m.scale.z = 0.05
+            m.points = [Point(x=x, y=y, z=0.03) for x, y in graph.nodes]
+            markers.markers.append(m)
+            m = marker('pipes', 0, Marker.LINE_LIST, (0.6, 0.3, 0.9, 0.8), 0.06)
+            for i, j, _ in graph.edges:
+                m.points += [Point(x=graph.nodes[i][0], y=graph.nodes[i][1], z=0.3),
+                             Point(x=graph.nodes[j][0], y=graph.nodes[j][1], z=0.3)]
+            for i, _, _, end in graph.ends:
+                m.points += [Point(x=graph.nodes[i][0], y=graph.nodes[i][1], z=0.3),
+                             Point(x=end[0], y=end[1], z=0.3)]
+            if m.points:
+                markers.markers.append(m)
+        if self.full and self.state == EXPLORING and self.chooser.order and snap is not None:
+            m = marker('tour', 0, Marker.LINE_STRIP, (1.0, 0.2, 0.8, 0.8), 0.04)
+            m.points = [Point(x=snap.robot_xy[0], y=snap.robot_xy[1], z=0.25)] + [
+                Point(x=f.goal[0], y=f.goal[1], z=0.25) for f in self.chooser.order]
+            markers.markers.append(m)
         if len(self.trajectory) > 1:
             m = marker('path', 0, Marker.LINE_STRIP, (1.0, 0.45, 0.0, 0.9), 0.05)
             m.points = [Point(x=p[1], y=p[2], z=0.05) for p in self.trajectory]
@@ -1074,6 +1305,11 @@ class Explorer(Node):
         os.makedirs(folder, exist_ok=True)
         m = self.map_msg
         grid = None
+        self.graph = None
+        if self.last_snapshot is not None:
+            # the network as a graph, from the last map (frontiers from the same map)
+            snap = self.last_snapshot
+            self.graph = PipeGraph(snap, snap.frontiers(self.min_size))
         if m is not None:
             grid = np.asarray(m.data, np.int16).reshape(m.info.height, m.info.width)
             res, ox, oy = m.info.resolution, m.info.origin.position.x, m.info.origin.position.y
@@ -1108,14 +1344,23 @@ class Explorer(Node):
                  '- Start: %s m in the map, facing %d deg'
                  % (fmt_xy(self.start), heading(self.start[2]))
                  if self.start else '- Start: not set',
-                 '- Distance driven: %.1f m' % driven]
+                 '- Distance driven: %.1f m' % driven,
+                 '- Driving: ' + ('forwards into new pipe (Hybrid-A* and an MPPI that never '
+                                  'reverses); reversing only over mapped pipe'
+                                  if self.forward_only else
+                                  'either way (forward_only:=false, as before)'),
+                 '- Reversed: %.1f m in all; of that %.1f m back to a manhole to turn round '
+                 'and %.1f m on the way to a frontier'
+                 % (self.reverse_total, self.reverse_spot, self.reverse_frontier),
+                 '- Turned on the spot to face a pipe before driving into it: %d times'
+                 % self.turns]
         if grid is not None:
             res = self.map_msg.info.resolution
             lines.append('- Mapped: %.1f m^2 of free space, %.1f m^2 of walls'
                          % (np.count_nonzero((grid >= 0) & (grid < 50)) * res * res,
                             np.count_nonzero(grid >= 50) * res * res))
         if self.full:
-            return '\n'.join(lines + self.full_report_lines())
+            return '\n'.join(lines + self.full_report_lines() + self.network_lines())
         lines += ['- Leg length limit: %s along the pipe'
                   % (('%.0f m' % self.leg_length) if self.leg_length > 0 else 'none'), '',
                   '| Leg | Heading | Explored along the pipe | Frontier goals sent '
@@ -1132,10 +1377,36 @@ class Explorer(Node):
                   '![Map with the path driven](map.png)', '',
                   'Map: white = free, black = wall, grey = not mapped. Orange line = path '
                   'driven, green dot = start, yellow dots = frontier goals reached, '
-                  'blue dots = leg ends.', '', '## Events', '', '```']
+                  'blue dots = leg ends, purple dots = manholes.', '', '## Events', '', '```']
         lines += self.events
         lines += ['```', '']
-        return '\n'.join(lines)
+        return '\n'.join(lines + self.network_lines())
+
+    def network_lines(self):
+        """Describe the network as a graph: manholes and the pipes between them (PipeGraph)."""
+        g = self.graph
+        if g is None or not g.nodes:
+            return []
+        names = ['M%d' % (i + 1) for i in range(len(g.nodes))]
+        dead = [e for e in g.ends if not e[2]]
+        lines = ['## Pipe network', '',
+                 'The map as a graph (PipeGraph in agos_sim/frontiers.py): %d manholes '
+                 '(places with room to turn round, purple on the map, M1 nearest the end of '
+                 'the mission), %d pipes between them, %d dead ends and %d pipes not explored '
+                 'to the end; %.1f m of pipe in all, measured from the middle of the manholes.'
+                 % (len(g.nodes), len(g.edges), len(dead), len(g.ends) - len(dead), g.length()),
+                 '', '| Manhole | Position (m) |', '|---|---|']
+        lines += ['| %s | %s |' % (n, fmt_xy(p)) for n, p in zip(names, g.nodes)]
+        lines += ['', '| Pipe | Length | Ends at |', '|---|---|---|']
+        lines += ['| %s to %s | %.1f m | %s |' % (names[i], names[j], d, names[j])
+                  for i, j, d in g.edges]
+        lines += ['| %s, %s | %.1f m | %s |'
+                  % (names[i], 'not explored to the end' if is_open else 'dead end', d,
+                     fmt_xy(end)) for i, d, is_open, end in g.ends]
+        if g.loose:
+            lines.append('| (reaches no manhole) | | %s |'
+                         % ', '.join(fmt_xy(p) for p in g.loose))
+        return lines + ['']
 
     def full_report_lines(self):
         """Write the rest of the report in full mode, after the lines both modes share."""
@@ -1156,18 +1427,20 @@ class Explorer(Node):
                                                   ', '.join(fmt_xy(p) for p in points[:8])
                                                   + (' ...' if len(points) > 8 else '')))
         lines += ['', 'Frontier selection: TAD (Buriboev, Choi and Jeon, 2025), F = d + a + t, '
-                  'among the frontiers within %.0f m of the nearest one; the robot keeps to '
-                  'the pipe it is in, and goes back for the other pipes of a manhole once '
-                  'it is %.0f m past it (WholeMap in agos_sim/frontiers.py). A goal that was '
+                  'among the frontiers %s within %.0f m of the best one, counting the turns '
+                  'needed to drive into each forwards; the robot keeps to the pipe it is in, '
+                  'and goes back for the other pipes of a manhole once it is %.0f m past it '
+                  '(WholeMap and plan_tour in agos_sim/frontiers.py). A goal that was '
                   'sent but neither reached nor failed was replaced as the map grew.'
-                  % (self.reach, self.peek), '',
+                  % ('that start a tour through all of them and back to the start'
+                     if self.tour else 'nearest the robot', self.reach, self.peek), '',
                   '![Map with the path driven](map.png)', '',
                   'Map: white = free, black = wall, grey = not mapped. Orange line = path '
                   "driven (RTAB-Map's, which loop closures move with the map; "
                   'trajectory.csv has where the robot was on the map at the time), '
                   'green dot = start, yellow dots = frontier goals reached, '
                   'red dots = frontiers left (other than gaps in walls and the ones next '
-                  'to the path driven).', '',
+                  'to the path driven), purple dots = manholes.', '',
                   '## Events', '', '```']
         lines += self.events
         lines += ['```', '']
@@ -1216,6 +1489,9 @@ class Explorer(Node):
             for (x, y), why in self.leftover():
                 if not why.startswith('gap') and why != NEAR_TRAIL_WHY:
                     dot(x, y, (220, 30, 30), 3)
+        if self.graph is not None:
+            for x, y in self.graph.nodes:
+                dot(x, y, (140, 60, 210), 5)
         if self.start:
             dot(self.start[0], self.start[1], (0, 170, 0), 4)
         return img[::-1]    # image rows go down, map rows go up

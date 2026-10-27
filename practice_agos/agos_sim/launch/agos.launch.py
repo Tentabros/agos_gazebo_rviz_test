@@ -5,6 +5,8 @@ The whole AGOS simulation in one command.
     ros2 launch agos_sim agos.launch.py explore:=true    # the autonomous 25 m mission
     ros2 launch agos_sim agos.launch.py explore:=true explore_mode:=full   # map the whole network
     ros2 launch agos_sim agos.launch.py gz_gui:=false    # no Gazebo window: faster, watch in RViz
+    ros2 launch agos_sim agos.launch.py slam:=remote slam_host:=192.168.1.42
+        # RTAB-Map on a Raspberry Pi (agos_pi_slam); needs RMW_IMPLEMENTATION=rmw_zenoh_cpp
 
 It starts sim.launch.py (Gazebo, the robot, the sensor bridge, odometry,
 RViz), slam_nav.launch.py (RTAB-Map and Nav2, which starts itself once the
@@ -39,6 +41,8 @@ SLAM_ARGS = [
     ('rtabmap_viz', 'false', "Also open RTAB-Map's own window (heavy)"),
     ('nav2', 'true', 'Start Nav2'),
     ('autostart', 'true', 'Start Nav2 by itself once the map exists'),
+    ('slam', 'local', 'local = RTAB-Map here; remote = on a Raspberry Pi (agos_pi_slam)'),
+    ('slam_host', '', 'slam:=remote: address of the Raspberry Pi'),
 ]
 
 
@@ -55,6 +59,13 @@ def generate_launch_description():
                               description="legs = the proposal's mission (leg_length each way "
                                           'from the start); full = map the whole network, '
                                           'then come back'),
+        DeclareLaunchArgument('forward_only', default_value='true',
+                              description='Drive into unmapped pipe forwards only, turning '
+                                          'round in manholes (false = the old behaviour, '
+                                          'which may reverse into new pipe)'),
+        DeclareLaunchArgument('tour', default_value='true',
+                              description='full mode: plan a tour through all the open '
+                                          'pipe ends instead of taking the nearest'),
     ]
 
     sim = IncludeLaunchDescription(
@@ -75,7 +86,10 @@ def generate_launch_description():
         parameters=[{'use_sim_time': False,
                      'mode': LaunchConfiguration('explore_mode'),
                      'leg_length': ParameterValue(LaunchConfiguration('leg_length'),
-                                                  value_type=float)}],
+                                                  value_type=float),
+                     'forward_only': ParameterValue(LaunchConfiguration('forward_only'),
+                                                    value_type=bool),
+                     'tour': ParameterValue(LaunchConfiguration('tour'), value_type=bool)}],
         condition=IfCondition(LaunchConfiguration('explore')),
     )
     return LaunchDescription(args + [sim, slam_nav, explorer])

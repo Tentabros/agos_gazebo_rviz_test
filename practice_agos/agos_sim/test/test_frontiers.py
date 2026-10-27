@@ -11,8 +11,8 @@ import math
 import os
 import time
 
-from agos_sim.frontiers import (angle_diff, close_gaps, dilate, Grid, nearest_first, Snapshot,
-                                WholeMap)
+from agos_sim.frontiers import (angle_diff, close_gaps, dilate, Grid, nearest_first, PipeGraph,
+                                plan_tour, Snapshot, TURN_COST, WholeMap)
 import numpy as np
 
 RES = 0.05
@@ -391,6 +391,135 @@ def test_whole_map_drives_on_when_its_frontier_goes():
     chooser.target = gone
     f, hold = chooser.choose(snap, frontiers)
     assert f is not None and not hold
+
+
+def test_turn_spots_are_the_manholes():
+    # 2.4 m manhole: room to turn; 900 mm pipe: none
+    snap = Snapshot(manhole_with_two_pipes(), (0.0, 0.0))
+    turn = snap.turn_spots()
+    assert turn[snap.g.cell(0.0, 0.0)]
+    for x in (2.0, 4.0, -2.0):
+        assert not turn[snap.g.cell(x, 0.0)], x
+    (centre, entry, _), = snap.manholes()
+    assert math.hypot(*snap.g.xy(*centre)) < 0.15
+
+
+def test_approach_ahead_turn_and_back():
+    grid = manhole_with_two_pipes(east=8.0, west=6.0)
+    east, west = (8.5, 0.0), (-6.5, 0.0)
+    # in the east pipe facing east: the east end is ahead; the west one is
+    # behind, so back up to the manhole, turn there, and go on forwards
+    snap = Snapshot(grid, (4.0, 0.0), robot_yaw=0.0)
+    cost, how, spot = snap.approach(snap.snap(east))
+    assert how == 'ahead' and abs(cost - 4.5) < 0.3, (cost, how)
+    cost, how, spot = snap.approach(snap.snap(west))
+    assert how == 'back' and math.hypot(*spot) < 0.3, (how, spot)
+    assert abs(cost - (10.5 + TURN_COST)) < 0.4, cost
+    # in the manhole facing east: turn there for the west pipe
+    snap = Snapshot(grid, (0.0, 0.0), robot_yaw=0.0)
+    assert snap.approach(snap.snap(west))[1] == 'turn'
+    assert snap.approach(snap.snap(east))[1] == 'ahead'
+    # without a heading every route is 'ahead'
+    snap = Snapshot(grid, (4.0, 0.0))
+    assert snap.approach(snap.snap(west))[1] == 'ahead'
+
+
+def test_approach_loop_and_reverse_only():
+    # a pipe with a manhole only at its east end; the robot faces it 2 m
+    # off. The west end is behind with nowhere to turn on the way: go on to
+    # the manhole, turn, come back. With no manhole at all: reverse only.
+    m = MapBuilder(-12.0, -2.0, 8.0, 2.0)
+    m.chamber(5.0, 0.0)
+    m.pipe([(-11.0, 0.0), (5.0, 0.0)])
+    snap = Snapshot(m.grid(), (2.0, 0.0), robot_yaw=0.0)
+    west = snap.snap((-10.8, 0.0))
+    cost, how, spot = snap.approach(west)
+    assert how == 'loop' and abs(spot[0] - 5.0) < 0.3, (how, spot)
+    assert abs(cost - (12.8 + 2 * 3.0 + TURN_COST)) < 0.6, cost
+    m = MapBuilder(-12.0, -2.0, 8.0, 2.0)
+    m.pipe([(-11.0, 0.0), (7.0, 0.0)])
+    snap = Snapshot(m.grid(), (2.0, 0.0), robot_yaw=0.0)
+    cost, how, spot = snap.approach(snap.snap((-10.8, 0.0)))
+    assert how == 'reverse' and cost == math.inf
+
+
+def test_frontiers_carry_their_travel_cost():
+    snap = Snapshot(manhole_with_two_pipes(east=8.0, west=6.0), (4.0, 0.0), robot_yaw=0.0)
+    by_x = sorted(snap.frontiers(), key=lambda f: f.goal[0])
+    assert by_x[0].how == 'back' and by_x[-1].how == 'ahead'
+    assert by_x[0].travel > by_x[0].path + 0.5 * TURN_COST
+    assert by_x[-1].travel == by_x[-1].path
+
+
+def test_tour_through_the_frontiers_and_home():
+    # manhole at the origin, pipes known 2 m north, 6 m east and 9 m west
+    # (each with a frontier at its end); the robot in the manhole facing
+    # east. Out and back along each pipe is the same distance in any order,
+    # so the turns decide: the pipe ahead first saves the turn at the start
+    # (a quarter turn for the north pipe, a half turn for the west one).
+    m = MapBuilder(-11.0, -2.0, 9.0, 5.0)
+    m.chamber(0.0, 0.0)
+    m.pipe([(0.0, 0.0), (7.2, 0.0)])
+    m.pipe([(0.0, 0.0), (-10.2, 0.0)])
+    m.pipe([(0.0, 0.0), (0.0, 3.2)])
+    snap = Snapshot(m.grid(), (0.0, 0.0), robot_yaw=0.0)
+    frontiers = snap.frontiers()
+    assert len(frontiers) == 3, frontiers
+    east, north, west = (max(frontiers, key=lambda f: f.goal[0]),
+                         max(frontiers, key=lambda f: f.goal[1]),
+                         min(frontiers, key=lambda f: f.goal[0]))
+    costs, order = plan_tour(snap, frontiers, home=(0.0, 0.0))
+    assert order[0] is east and set(order) == set(frontiers), order
+    assert costs[east] == min(costs.values())
+    assert 0.3 * TURN_COST < costs[north] - costs[east] < TURN_COST, costs
+    assert abs(costs[west] - costs[east] - TURN_COST) < 0.5, costs
+    # out and back along each pipe (less the corners it cuts across the
+    # manhole between pipes), plus a turn after each frontier
+    lengths = 2 * (east.path + north.path + west.path)
+    assert lengths - 2.5 < costs[east] - 3 * TURN_COST < lengths, (costs[east], lengths)
+    chooser = WholeMap(reach=0.5, tour=True, home=(0.0, 0.0))
+    f, hold = chooser.choose(snap, frontiers)
+    assert f is east and chooser.order == order
+
+
+def test_tour_ends_near_home():
+    # the robot in a manhole facing east, pipes known 3 m east and 4 m west
+    # with frontiers at their ends, and home 20 m further west. Nearest
+    # first goes east; so does the tour, but because it then ends in the
+    # west, on the way home. With home in the east it goes west first.
+    m = MapBuilder(-26.0, -2.0, 26.0, 2.0)
+    m.chamber(0.0, 0.0)
+    m.pipe([(0.0, 0.0), (4.2, 0.0)])
+    m.pipe([(0.0, 0.0), (-5.2, 0.0)])
+    snap = Snapshot(m.grid(), (0.0, 0.0), robot_yaw=0.0)
+    frontiers = snap.frontiers()
+    east = max(frontiers, key=lambda f: f.goal[0])
+    _, order = plan_tour(snap, frontiers, home=(-4.5, 0.0))
+    assert order[0] is east, order
+    _, order = plan_tour(snap, frontiers, home=(3.5, 0.0))
+    assert order[0] is not east, order
+
+
+def test_pipe_graph_of_a_small_network():
+    # four manholes in a 16 x 12 m loop and a dead end off B, all mapped
+    m = MapBuilder(-2.0, -14.0, 25.0, 2.0)
+    a, b, c, d = (0.0, 0.0), (16.0, 0.0), (16.0, -12.0), (0.0, -12.0)
+    for ch in (a, b, c, d):
+        m.chamber(*ch)
+    for p, q in ((a, b), (b, c), (c, d), (d, a)):
+        m.pipe([p, q])
+    m.pipe([b, (23.0, 0.0)])
+    m.cap(23.0, 0.0, 0.0)
+    snap = Snapshot(m.grid(), (0.0, 0.0), robot_yaw=0.0)
+    graph = PipeGraph(snap, snap.frontiers())
+    assert len(graph.nodes) == 4, graph.nodes
+    assert math.hypot(*graph.nodes[0]) < 0.3     # nearest the robot first
+    lengths = sorted(round(e[2]) for e in graph.edges)
+    assert lengths == [12, 12, 16, 16], graph.edges
+    (node, length, is_open, end), = graph.ends
+    assert math.hypot(graph.nodes[node][0] - 16.0, graph.nodes[node][1]) < 0.3
+    assert 6.0 < length < 7.5 and not is_open, graph.ends
+    assert 60.0 < graph.length() < 64.0
 
 
 def explore_whole_map(m, start, lidar=8.0, step=0.6):

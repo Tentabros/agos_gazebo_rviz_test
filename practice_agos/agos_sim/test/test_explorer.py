@@ -7,6 +7,7 @@ Needs ROS 2 sourced (the module imports rclpy and Nav2's messages); skipped
 without it. The methods run on stand-ins for the node, without ROS running.
 """
 import ast
+import math
 import types
 
 import numpy as np
@@ -65,27 +66,56 @@ def test_standing_still_is_stuck():
     assert first_stuck(stand_in((5.0, 0.0)), [(0.0, 0.0)] * 60) == 40
 
 
-def test_distance_driven_leaves_out_jitter():
+def odometry_stand_in():
+    """Make a stand-in for the node with what add_driven needs; at(x, yaw) moves it."""
     s = types.SimpleNamespace(odom_frame='odom', robot_frame='base_footprint',
-                              distance=0.0, last_odom=None)
+                              distance=0.0, last_odom=None, reverse_total=0.0,
+                              reverse_spot=0.0, reverse_frontier=0.0,
+                              state=explorer.EXPLORING, goal_kind='frontier')
 
-    def at(x):
+    def at(x, yaw=0.0):
         tf = types.SimpleNamespace(transform=types.SimpleNamespace(
-            translation=types.SimpleNamespace(x=x, y=0.0)))
+            translation=types.SimpleNamespace(x=x, y=0.0),
+            rotation=types.SimpleNamespace(x=0.0, y=0.0, z=math.sin(yaw / 2),
+                                           w=math.cos(yaw / 2))))
         s.tf_buffer = types.SimpleNamespace(lookup_transform=lambda *args: tf)
         explorer.Explorer.add_driven(s)
+    return s, at
+
+
+def test_distance_driven_leaves_out_jitter():
+    s, at = odometry_stand_in()
     for i in range(1000):           # standing still, the odometry 1 cm back and forth
         at(0.01 * (i % 2))
     assert s.distance == 0.0
     for i in range(501):            # then 10 m in 2 cm steps
         at(0.02 * i)
     assert 9.9 <= s.distance <= 10.0
+    assert s.reverse_total == 0.0
+
+
+def test_reversing_is_counted_by_what_it_was_for():
+    # 3 m backwards to a manhole to turn, then 2 m backwards on the way to a
+    # frontier (what forward_only stops), then, turned round, 1 m forwards
+    s, at = odometry_stand_in()
+    at(0.0)
+    s.state = explorer.REPOSITIONING
+    for i in range(31):
+        at(-0.1 * i)
+    s.state = explorer.EXPLORING
+    for i in range(1, 21):
+        at(-3.0 - 0.1 * i)
+    for i in range(1, 11):
+        at(-5.0 - 0.1 * i, yaw=math.pi)
+    assert abs(s.distance - 6.0) < 0.05
+    assert abs(s.reverse_spot - 3.0) < 0.05 and abs(s.reverse_frontier - 2.0) < 0.05
+    assert abs(s.reverse_total - 5.0) < 0.05
 
 
 def report_map(**node):
     """Draw the report's map, 3 x 2 m of free space, on a stand-in; return where it is orange."""
     s = {'full': False, 'map_path': [], 'visited': [], 'leg_stats': [], 'start': None,
-         'leftover': lambda: []}
+         'leftover': lambda: [], 'graph': None}
     s.update(node)
     img = explorer.Explorer.map_image(types.SimpleNamespace(**s),
                                       np.zeros((40, 60), np.int16), 0.05, 0.0, 0.0)

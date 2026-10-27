@@ -28,6 +28,12 @@ RUN apt-get update && apt-get dist-upgrade -y && apt-get install -y --no-install
         mesa-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# Zenoh, for SLAM on a Raspberry Pi (slam:=remote, agos_pi_slam). A layer of
+# its own, so an image built before it was added only downloads this.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-lyrical-rmw-zenoh-cpp \
+    && rm -rf /var/lib/apt/lists/*
+
 # Windows display (WSLg): draw through X11, and use the Windows GPU through
 # Direct3D 12 when ./agos passes it in (/usr/lib/wsl, /dev/dxg).
 ENV QT_QPA_PLATFORM=xcb \

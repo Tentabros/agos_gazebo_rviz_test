@@ -39,6 +39,20 @@ the pipe then looks too narrow on the map where it is not (Snapshot, driven).
 The grid is first pooled to COARSE metres per cell (0.05 m RTAB-Map cells ->
 0.1 m), which keeps everything here fast enough for a Raspberry Pi.
 
+Driving forwards into new pipe (NAV_ALGORITHMS.md): the robot can only
+turn round where it has room (manholes: Snapshot.manholes), and the camera
+looks ahead, so new pipe is entered forwards and the robot reverses only
+over pipe already mapped. Snapshot.approach plans that for a goal: drive on
+if the route leaves ahead of the robot, else turn where it is, back up to
+the first manhole on the route and turn there, or go on to a manhole ahead,
+turn and come back. Each turn costs TURN_COST m (the yaw term in FUEL's
+motion cost: Zhou et al., "FUEL: Fast UAV Exploration using Incremental
+Frontier Structure and Hierarchical Planning", RA-L 6(2), 2021). A frontier
+that could only be reached in reverse is not chosen. In full mode the next
+frontier is the first of a tour through all of them and back home
+(plan_tour: the global tour of TARE, Cao et al., RSS 2021, and FUEL), and
+PipeGraph turns the map into manholes and the pipes between them.
+
 In a pipe the LiDAR meets the walls at a shallow angle a few metres ahead,
 so RTAB-Map's map has gaps in the walls there, and the free cells next to
 those gaps look like frontiers. Gaps of one or two cells (up to 0.2 m) are
@@ -61,6 +75,16 @@ TRAPEZOID_TOL = 0.25    # outer/inner within +-25 % counts as the same width (t 
 WALL_GAP = 0.2          # m, closing radius: closes gaps up to 0.2 m, keeps passages >= 0.5 m
 TRAIL_RADIUS = 0.1      # m: cells this close to where the robot has driven are passable
 TRAIL_STEP = 1.0        # m: points of that path further apart than this are not joined
+# Turning on the spot: the robot's corners are 0.40 m from its centre, and a
+# 900 mm pipe leaves 0.45 m, too little for its tracks on the curved wall. A
+# cell is a place to turn if no wall or unmapped cell is within TURN_ROOM
+# cells (Chebyshev distance, so at least that far in metres too): 0.5 m.
+TURN_ROOM = 5           # cells (of COARSE m)
+TURN_COST = 2.0         # m: a half turn on the spot, as distance (about the time it takes)
+TURN_FREE = math.radians(45)    # a route this far off the heading needs no turn first
+LOOK_AHEAD = 1.0        # m along a route: the direction it leaves the robot in
+CLEARANCE_CAP = 8       # cells: clearance is worked out up to this
+TOUR_LIMIT = 9          # frontiers in the tour (the nearest); exact up to this
 
 OCCUPIED = 50           # occupancy value at or above which a cell is an obstacle
 
@@ -253,6 +277,9 @@ class Frontier:
         self.t = 0
         self.outer = self.inner = 0.0
         self.path = math.inf        # path length from the robot, m
+        self.travel = math.inf      # path length plus turns, driving forwards into it, m
+        self.how = 'ahead'          # how to get there forwards (Snapshot.approach)
+        self.spot = None            # (x, y): where to turn round on the way, if anywhere
         self.from_start = math.inf  # path length from the mission start, m
         self.branch = math.nan      # bearing of the pipe it is reached through
         self.score = 0.0
@@ -274,13 +301,16 @@ class Snapshot:
     which a path counts as having left the start manhole through a pipe.
     driven: (x, y) points along the path the robot has driven, oldest first
     (full mode). The cells along it are passable whatever the map shows
-    there now (see trail).
+    there now (see trail). robot_yaw: the robot's heading (rad), for
+    approach; without it every route counts as leaving ahead.
     """
 
     def __init__(self, grid, robot_xy, start_xy=None, clearance=0.2, exit_radius=2.5,
-                 driven=None):
+                 driven=None, robot_yaw=None):
         self.g = grid
         self.robot_xy = robot_xy
+        self.robot_yaw = robot_yaw
+        self._clear = self._turn = self._manholes = None
         # walls with their small gaps closed (see WALL_GAP)
         self.walls = close_gaps(grid.occ, max(1, int(round(WALL_GAP / grid.res))))
         radius = max(1, int(math.ceil(clearance / grid.res - 1e-9)))
@@ -428,6 +458,140 @@ class Snapshot:
         i = int(np.argmin(d))
         return int(best[i, 0] + r0), int(best[i, 1] + c0)
 
+    # ------------------------------------------------------------ turning round
+
+    def clearance(self):
+        """
+        Cells to the nearest wall or unmapped cell, for each cell (up to CLEARANCE_CAP).
+
+        Chebyshev distance (squares round the cell), so the true distance
+        is at least this.
+        """
+        if self._clear is None:
+            ok = ~(self.walls | self.g.unknown)
+            level = np.zeros(self.g.shape, np.int16)
+            for _ in range(CLEARANCE_CAP):
+                level += ok
+                ok = erode(ok, 1)
+                if not ok.any():
+                    break
+            self._clear = level
+        return self._clear
+
+    def turn_spots(self):
+        """Reachable cells where the robot has room to turn on the spot (TURN_ROOM)."""
+        if self._turn is None:
+            self._turn = (self.clearance() > TURN_ROOM) & np.isfinite(self.dist)
+        return self._turn
+
+    def manholes(self):
+        """
+        Find the places to turn round (in a sewer, the manholes).
+
+        Returns [(centre cell, entry cell, cells)]: the cell with the most
+        room (nearest the middle if several), the one the robot reaches
+        first, and all of them (the places to turn), nearest first.
+        """
+        if self._manholes is None:
+            labels, count = label(self.turn_spots())
+            clear = self.clearance()
+            out = []
+            for k in range(1, count + 1):
+                cells = np.argwhere(labels == k)
+                d = self.dist[cells[:, 0], cells[:, 1]]
+                entry = tuple(int(v) for v in cells[int(np.argmin(d))])
+                room = clear[cells[:, 0], cells[:, 1]]
+                best = cells[room >= room.max()]
+                mid = cells.mean(axis=0)
+                i = int(np.argmin(((best - mid) ** 2).sum(axis=1)))
+                out.append((tuple(int(v) for v in best[i]), entry, cells))
+            out.sort(key=lambda m: self.dist[m[1]])
+            self._manholes = out
+            # each manhole's floor: its places to turn and the passable
+            # cells round them, out to its walls and pipe openings
+            area = np.zeros(self.g.shape, np.int32)
+            reach = TURN_ROOM + 2
+            for i, (_, _, cells) in enumerate(out):
+                m = np.zeros(self.g.shape, bool)
+                m[cells[:, 0], cells[:, 1]] = True
+                area[dilate(m, reach) & self.traversable & (area == 0)] = i + 1
+            self._manhole_area = area
+        return self._manholes
+
+    def manhole_at(self, cell):
+        """Return the manhole (as in manholes) whose floor a cell is on, or None."""
+        mh = self.manholes()
+        k = int(self._manhole_area[cell])
+        return mh[k - 1] if k else None
+
+    def leaving(self, path, start=0):
+        """
+        Find the bearing (rad) in which a route leaves its cell path[start].
+
+        That is the direction to the point LOOK_AHEAD m further on; None if
+        less than 0.3 m of the route is left. From the robot (start 0) it is
+        measured from where the robot really is.
+        """
+        g = self.g
+        d0 = self.dist[path[start]]
+        end = None
+        for c in path[start + 1:]:
+            end = c
+            if (self.dist[c] - d0) * g.res >= LOOK_AHEAD:
+                break
+        if end is None or (self.dist[end] - d0) * g.res < 0.3:
+            return None
+        x0, y0 = self.robot_xy if start == 0 else g.xy(*path[start])
+        x1, y1 = g.xy(*end)
+        return math.atan2(y1 - y0, x1 - x0)
+
+    def approach(self, cell):
+        """
+        Plan how to drive to `cell` forwards: a heading-aware travel cost.
+
+        Returns (cost in m, how, spot). how is
+          'ahead'    the route leaves ahead of the robot: drive there
+          'turn'     the robot has room to turn where it is: turn to face the
+                     route first (spot is None)
+          'back'     reverse along the route to `spot`, the middle of the first
+                     manhole on it, turn there, and drive on forwards
+          'loop'     drive forwards to `spot`, the middle of a manhole ahead,
+                     turn there and come back
+          'reverse'  only reachable in reverse (no room to turn on the way):
+                     the cost is inf
+        The cost is the path length plus TURN_COST for a half turn (in
+        proportion for less), plus the drive there and back for 'loop'.
+        Reversing ('back') only ever goes over the route, which is mapped
+        pipe. Without the robot's heading every route counts as 'ahead'.
+        """
+        path = self.route(cell)
+        if path is None:
+            return math.inf, 'reverse', None
+        length = self.dist[cell] * self.g.res
+        bearing = self.leaving(path) if self.robot_yaw is not None else None
+        if bearing is None:
+            return length, 'ahead', None
+        off = angle_diff(bearing, self.robot_yaw)
+        turn = self.turn_spots()
+        if turn[self.robot_cell] and off > TURN_FREE:
+            return length + TURN_COST * off / math.pi, 'turn', None
+        if off <= math.pi / 2:
+            return length, 'ahead', None
+        best = (math.inf, 'reverse', None)
+        on = next((m for m in (self.manhole_at(c) for c in path) if m is not None), None)
+        if on is not None:
+            best = (length + TURN_COST, 'back', self.g.xy(*on[0]))
+        for centre, entry, _ in self.manholes():
+            d = self.dist[entry] * self.g.res
+            if length + 2.0 * d + TURN_COST >= best[0]:
+                break                   # (nearest first: the others are further still)
+            b = self.leaving(self.route(entry))
+            if b is None or angle_diff(b, self.robot_yaw) <= math.pi / 2:
+                best = (length + 2.0 * self.dist[centre] * self.g.res + TURN_COST, 'loop',
+                        self.g.xy(*centre))
+                break
+        return best
+
     # ------------------------------------------------------------ frontiers
 
     def frontiers(self, min_size=0.3):
@@ -478,6 +642,7 @@ class Snapshot:
                 float(xs.max() + g.res / 2), float(ys.max() + g.res / 2))
         f = Frontier(cells, centroid, goal_cell, g.xy(*goal_cell), len(cells) * g.res, rect)
         f.path = self.path_length(goal_cell)
+        f.travel, f.how, f.spot = self.approach(goal_cell)
         if self.dist_start is not None:
             f.from_start = self.dist_start[goal_cell] * g.res
             f.branch = float(self.branch[goal_cell])
@@ -606,13 +771,79 @@ def nearest_first(frontiers, reach):
     """
     Choose a frontier when exploring the whole map: TAD among the nearest.
 
-    Returns the highest TAD score among the frontiers whose path from the
-    robot is at most `reach` m longer than the nearest one's. So the robot
-    maps the pipes round it before it drives on, rather than coming back for
-    them across the network.
+    Returns the highest TAD score among the frontiers whose travel cost
+    from the robot (path length plus turns, Snapshot.approach) is at most
+    `reach` m more than the nearest one's. So the robot maps the pipes round
+    it before it drives on, rather than coming back for them across the
+    network.
     """
-    nearest = min(f.path for f in frontiers)
-    return max((f for f in frontiers if f.path <= nearest + reach), key=lambda f: f.score)
+    nearest = min(f.travel for f in frontiers)
+    return max((f for f in frontiers if f.travel <= nearest + reach), key=lambda f: f.score)
+
+
+def plan_tour(snap, frontiers, home=None, limit=TOUR_LIMIT):
+    """
+    Plan one tour from the robot through every frontier and back home.
+
+    The global tour of TARE (Cao, Zhu, Choset and Zhang, RSS 2021) and FUEL
+    (Zhou et al., RA-L 2021) on the pipes: the cost of a tour is its length
+    through the mapped pipes plus its turns. The first leg is each
+    frontier's travel cost (Snapshot.approach); every leg after a frontier
+    adds TURN_COST, because the robot faces into the pipe it has just
+    explored and has to turn back. home: (x, y) to end at (None: the tour
+    ends at its last frontier).
+
+    The `limit` frontiers with the lowest travel cost are put in order
+    exactly (Held-Karp dynamic programming, 2^n n^2 steps); the others are
+    left out: they are further away and change little about which comes
+    first. Returns ({frontier: cost of the best tour that starts with it},
+    best tour as a list).
+    """
+    cand = sorted((f for f in frontiers if math.isfinite(f.travel)),
+                  key=lambda f: f.travel)[:limit]
+    n = len(cand)
+    if n == 0:
+        return {}, []
+    res = snap.g.res
+    pair = [[0.0] * n for _ in range(n)]
+    for i, f in enumerate(cand):
+        dist, _ = geodesic(snap.traversable, f.goal_cell)
+        for j, g in enumerate(cand):
+            if i != j:
+                pair[i][j] = dist[g.goal_cell] * res + TURN_COST
+    end = [0.0] * n
+    if home is not None:
+        cell = snap.snap(home)
+        dist = geodesic(snap.traversable, cell)[0] if cell else None
+        for i, f in enumerate(cand):
+            d = dist[f.goal_cell] * res if dist is not None else math.inf
+            end[i] = d + TURN_COST if math.isfinite(d) else 0.0
+    # rest[mask][j]: cheapest way from frontier j through the frontiers in
+    # mask (j among them) and on home
+    full = (1 << n) - 1
+    rest = [[math.inf] * n for _ in range(full + 1)]
+    after = [[-1] * n for _ in range(full + 1)]
+    for j in range(n):
+        rest[1 << j][j] = end[j]
+    for mask in range(1, full + 1):
+        for j in range(n):
+            if not mask & (1 << j) or mask == 1 << j:
+                continue
+            others = mask & ~(1 << j)
+            for k in range(n):
+                if others & (1 << k):
+                    c = pair[j][k] + rest[others][k]
+                    if c < rest[mask][j]:
+                        rest[mask][j], after[mask][j] = c, k
+    costs = {f: f.travel + rest[full][i] for i, f in enumerate(cand)}
+    i = min(range(n), key=lambda i: cand[i].travel + rest[full][i])
+    order, mask = [], full
+    while i >= 0:
+        order.append(cand[i])
+        nxt = after[mask][i]
+        mask &= ~(1 << i)
+        i = nxt
+    return costs, order
 
 
 def _near(xy, point, radius):
@@ -653,14 +884,24 @@ class WholeMap:
     end of a pipe at a bend can go from the map until the robot sees round
     the bend, and turning back for another frontier then took the robot
     away from the bend. (Only with `now`, the time, given to choose.)
+
+    With tour=True a new choice is the first frontier of the best tour
+    through all of them and back to `home` (plan_tour), TAD deciding between
+    first frontiers whose tours are within `reach` m of the best, instead of
+    the nearest (nearest_first). Either way the costs include the turns the
+    robot needs to drive into each frontier forwards.
     """
 
-    def __init__(self, reach=2.0, hold_radius=1.0, peek=12.0, track=6.0, wait=8.0):
+    def __init__(self, reach=2.0, hold_radius=1.0, peek=12.0, track=6.0, wait=8.0,
+                 tour=False, home=None):
         self.reach = reach
         self.hold_radius = hold_radius
         self.peek = peek
         self.track = track
         self.wait = wait
+        self.tour = tour
+        self.home = home         # (x, y): where the tour ends
+        self.order = []          # the frontiers in the order of the last tour
         self.target = None       # (x, y): the frontier the robot is driving to
         self.side = []           # [(frontier (x, y), where the robot was (x, y))]: to go back for
         self.waiting = []        # (x, y): frontiers left for later, never gone back for
@@ -676,8 +917,9 @@ class WholeMap:
         self.lost = None
 
     def expects(self, snap, f):
-        """Check whether f is the frontier it is going to, or one it left for later."""
-        points = ([self.target] if self.target is not None else []) + self.waiting
+        """Check whether f is the frontier it is going to, or one it left or passed for later."""
+        points = (([self.target] if self.target is not None else []) + self.waiting
+                  + [p for p, _ in self.side])
         return any(self._find(snap, [f], p) is f for p in points)
 
     def choose(self, snap, frontiers, heading=None, now=None):
@@ -728,7 +970,7 @@ class WholeMap:
                 self.note = 'a frontier far nearer than the one it was going to has come up'
                 self.waiting.append(current.goal)
                 self.detour = False
-                return self._go(snap, nearest_first(frontiers, self.reach)), False
+                return self._go(snap, self._pick(snap, frontiers)), False
             if held:
                 return None, True
             return self._go(snap, current), False
@@ -750,11 +992,23 @@ class WholeMap:
             ahead = [f for f in frontiers if angle_diff(
                 math.atan2(f.goal[1] - ry, f.goal[0] - rx), heading) < math.pi / 2]
             pool = ahead or frontiers
-        f = nearest_first(pool, self.reach)
+        f = self._pick(snap, pool)
         if heading is not None:
             self.waiting += [g.goal for g in frontiers
                              if g is not f and not self._same_pipe(snap, g, f.goal)]
         return self._go(snap, f), False
+
+    def _pick(self, snap, frontiers):
+        """Choose among frontiers: the tour's first, or the nearest (with TAD among the close)."""
+        if not self.tour or len(frontiers) < 2:
+            self.order = []
+            return nearest_first(frontiers, self.reach)
+        costs, self.order = plan_tour(snap, frontiers, self.home)
+        if not costs:
+            return nearest_first(frontiers, self.reach)
+        best = min(costs.values())
+        return max((f for f, c in costs.items() if c <= best + self.reach),
+                   key=lambda f: f.score)
 
     def _go(self, snap, f):
         self.target = f.goal
@@ -805,3 +1059,81 @@ class WholeMap:
 def _touch(a, b, gap):
     return not (a[2] + gap < b[0] or b[2] + gap < a[0]
                 or a[3] + gap < b[1] or b[3] + gap < a[1])
+
+
+class PipeGraph:
+    """
+    The mapped network as a graph: manholes and the pipes between them.
+
+    The topological view of a sewer (Choset and Burdick, "Sensor-Based
+    Exploration: The Hierarchical Generalized Voronoi Graph", IJRR 19(2),
+    2000; for pipe networks, Nguyen et al., Frontiers in Robotics and AI 9,
+    2022): manholes, where pipes meet and the robot can turn round, are the
+    nodes, and each pipe is an edge between the two manholes it joins, or a
+    branch off one manhole that ends in a dead end or, with a frontier at its
+    end, in pipe not explored yet.
+
+    Built from a Snapshot: a manhole is a place to turn round
+    (Snapshot.manholes) with the passable cells round it up to its walls; a
+    pipe is a connected stretch of passable cells outside the manholes.
+
+      nodes  [(x, y)]: the middle of each manhole, nearest the robot first
+      edges  [(i, j, length m)]: pipes from manhole i to manhole j
+      ends   [(i, length m, open, (x, y))]: pipes off manhole i that end;
+             open = a frontier is at the end; (x, y) = the end
+      loose  [(x, y)]: pipes that reach no manhole (both ends unexplored)
+    """
+
+    def __init__(self, snap, frontiers=()):
+        self.nodes, self.edges, self.ends, self.loose = [], [], [], []
+        mh = snap.manholes()
+        if not mh:
+            return
+        g = snap.g
+        trav = snap.traversable & np.isfinite(snap.dist)
+        grow = TURN_ROOM + 2
+        areas = []
+        for centre, _, cells in mh:
+            m = np.zeros(g.shape, bool)
+            m[cells[:, 0], cells[:, 1]] = True
+            areas.append(dilate(m, grow) & trav)
+            self.nodes.append(g.xy(*centre))
+        inside = np.zeros(g.shape, bool)
+        for a in areas:
+            inside |= a
+        labels, count = label(trav & ~inside)
+        open_cells = np.zeros(g.shape, bool)
+        for f in frontiers:
+            open_cells[f.goal_cell] = True
+        open_cells = dilate(open_cells, 3)
+        for k in range(1, count + 1):
+            seg = labels == k
+            if seg.sum() * g.res * g.res < 0.3:        # a speck, not a pipe
+                continue
+            rim = dilate(seg, 1)
+            touch = [i for i, a in enumerate(areas) if (rim & a).any()]
+            cells = np.argwhere(seg)
+            if not touch:
+                mid = cells[len(cells) // 2]
+                self.loose.append(g.xy(*mid))
+                continue
+            a = touch[0]
+            region = seg | areas[a]
+            for b in touch[1:]:
+                region = region | areas[b]
+            dist, _ = geodesic(region, mh[a][0])
+            dist = dist * g.res
+            if len(touch) >= 2:
+                for b in touch[1:]:
+                    d = float(dist[mh[b][0]])
+                    if math.isfinite(d):
+                        self.edges.append((a, b, d))
+                continue
+            d = np.where(seg, dist, -1.0)
+            r, c = np.unravel_index(int(np.argmax(d)), d.shape)
+            is_open = bool((seg & open_cells).any())
+            self.ends.append((a, float(d[r, c]), is_open, g.xy(r, c)))
+
+    def length(self):
+        """Pipe mapped in all, m (manhole to manhole, and out to the ends)."""
+        return sum(e[2] for e in self.edges) + sum(e[1] for e in self.ends)

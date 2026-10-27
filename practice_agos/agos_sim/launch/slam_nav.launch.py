@@ -22,14 +22,27 @@ left out here; the costmaps already keep the robot off the walls.
 
 Nav2 starts once RTAB-Map publishes the map -> odom transform (see
 nav_supervisor.py), instead of after a fixed 5 s delay.
+
+With slam:=remote RTAB-Map runs on another computer, a Raspberry Pi
+(agos_pi_slam, a separate download), and this computer sends it the sensors:
+
+    ros2 launch agos_sim slam_nav.launch.py slam:=remote slam_host:=192.168.1.42
+
+Everything here then talks through Zenoh (RMW_IMPLEMENTATION=rmw_zenoh_cpp,
+which ./agos sets): a Zenoh router started here connects to the one on the
+Pi, and only the topics the other side subscribes to cross the network. The
+camera images go as one compressed RGB-D message (rgbd_sync below), a few
+times a second: about 1 MB/s instead of 6.
 """
+import copy
 import os
+import socket
 import tempfile
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, GroupAction, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, SetParameter
@@ -101,6 +114,23 @@ RTABMAP_PARAMS = {
     'RGBD/OptimizeMaxError': '5',
 }
 
+# slam:=remote: the RGB-D images for RTAB-Map on the Pi, as one compressed
+# message (JPEG colour, PNG depth). RTAB-Map adds a map node a second, so 5
+# images a second are plenty. The Pi's launch file subscribes to
+# /camera/rgbd_image/compressed.
+RGBD_SYNC_PARAMS = {
+    'approx_sync': False,           # Gazebo stamps colour and depth alike
+    'compressed_rate': 5.0,         # Hz
+}
+RGBD_SYNC_REMAPPINGS = [
+    ('rgb/image', '/camera/image_raw'),
+    ('rgb/camera_info', '/camera/camera_info'),
+    ('depth/image', '/camera/depth/image_raw'),
+    ('rgbd_image', '/camera/rgbd_image'),
+    ('rgbd_image/compressed', '/camera/rgbd_image/compressed'),
+]
+ZENOH_PORT = 7447                   # the Zenoh router's port, here and on the Pi
+
 # Mapping: start a new map every time (the old database is deleted).
 MAPPING_PARAMS = {
     'Mem/IncrementalMemory': 'true',
@@ -171,6 +201,13 @@ def _write_nav2_params():
     agos = os.path.join(get_package_share_directory('agos_sim'), 'config', 'nav2_agos.yaml')
     with open(agos, 'r') as f:
         _merge(params, yaml.safe_load(f))
+    # The Reverse controller is FollowPath with a few changes (see
+    # nav2_agos.yaml): copy FollowPath, stock values and all, then apply them.
+    controllers = params['controller_server']['ros__parameters']
+    if isinstance(controllers.get('Reverse'), dict):
+        reverse = copy.deepcopy(controllers['FollowPath'])
+        _merge(reverse, controllers['Reverse'])
+        controllers['Reverse'] = reverse
 
     # The Gazebo bridge and DiffDrive use plain geometry_msgs/Twist on /cmd_vel.
     # Newer Nav2 publishes TwistStamped by default, which the bridge ignores.
@@ -204,9 +241,73 @@ def _true(context, name):
     return LaunchConfiguration(name).perform(context).lower() in ('true', '1', 'yes')
 
 
+def _zenoh_endpoint(host):
+    """Return the Zenoh endpoint of the Pi's router: an address, or a whole endpoint."""
+    if '/' in host:                 # already an endpoint, e.g. tcp/192.168.1.42:7450
+        return host
+    if ':' in host and not host.startswith('['):
+        if host.count(':') == 1:    # address:port
+            return 'tcp/' + host
+        host = '[%s]' % host        # IPv6
+    return 'tcp/%s:%d' % (host, ZENOH_PORT)
+
+
+def _zenoh_listen(port):
+    """Return the endpoint a Zenoh router listens on: every address, IPv6 and IPv4 if it can."""
+    # rmw_zenoh's own default is tcp/[::]:7447, which fails outright where
+    # IPv6 is switched off (seen in testing; some Raspberry Pi setups do this)
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+            s.bind(('::', 0))
+        return 'tcp/[::]:%d' % port
+    except OSError:
+        return 'tcp/0.0.0.0:%d' % port
+
+
+def _remote_slam(context):
+    """slam:=remote: the Zenoh router that connects to the Pi, and the images it gets."""
+    host = LaunchConfiguration('slam_host').perform(context).strip()
+    if not host:
+        raise RuntimeError('slam:=remote needs the address of the computer running RTAB-Map: '
+                           'slam_host:=<address>')
+    if os.environ.get('RMW_IMPLEMENTATION') != 'rmw_zenoh_cpp':
+        raise RuntimeError('slam:=remote talks to the Pi through Zenoh: start it with '
+                           'RMW_IMPLEMENTATION=rmw_zenoh_cpp (./agos and ./agos_pi do this)')
+    override = 'listen/endpoints=["%s"];connect/endpoints=["%s"]' % (
+        _zenoh_listen(ZENOH_PORT), _zenoh_endpoint(host))
+    return [
+        # The router every node here connects to (tcp/localhost:7447). It
+        # also connects to the Pi's router, and keeps trying until it can.
+        ExecuteProcess(
+            cmd=['ros2', 'run', 'rmw_zenoh_cpp', 'rmw_zenohd'],
+            additional_env={'ZENOH_CONFIG_OVERRIDE': override},
+            output='screen',
+            name='zenoh_router',
+        ),
+        # A new simulation (its clock starts from 0 again): RTAB-Map on the
+        # Pi starts a new map. Waits until the Pi is there.
+        ExecuteProcess(
+            cmd=['ros2', 'service', 'call', '/agos_pi/new_simulation', 'std_srvs/srv/Trigger'],
+            output='screen',
+            name='new_map_on_pi',
+        ),
+        Node(
+            package='rtabmap_sync',
+            executable='rgbd_sync',
+            name='rgbd_sync',
+            output='screen',
+            parameters=[RGBD_SYNC_PARAMS],
+            remappings=RGBD_SYNC_REMAPPINGS,
+        ),
+    ]
+
+
 def _launch_setup(context, *args, **kwargs):
     localization = _true(context, 'localization')
     log_level = LaunchConfiguration('log_level')
+    slam = LaunchConfiguration('slam').perform(context).strip().lower()
+    if slam not in ('local', 'remote', 'none'):
+        raise RuntimeError('slam:=%s: use local, remote or none' % slam)
     rtabmap_params = dict(RTABMAP_PARAMS)
     rtabmap_params.update(LOCALIZATION_PARAMS if localization else MAPPING_PARAMS)
     database = LaunchConfiguration('database_path').perform(context)
@@ -239,11 +340,17 @@ def _launch_setup(context, *args, **kwargs):
         condition=IfCondition(LaunchConfiguration('rtabmap_viz')),
     )
 
-    actions = [rtabmap_slam, rtabmap_viz]
-    if not localization:
+    if slam == 'local':
+        actions = [rtabmap_slam, rtabmap_viz]
+    elif slam == 'remote':
+        actions = _remote_slam(context)
+    else:                           # none: map -> odom comes from elsewhere
+        actions = []
+    if slam == 'remote' or (slam == 'local' and not localization):
         # 2b. The odometry as a GPS fix in each new map node (see
         # RTABMAP_PARAMS, Rtabmap/LoopGPS). Wall clock: it only copies the
-        # time of the odometry it passes on.
+        # time of the odometry it passes on. (With slam:=remote the Pi
+        # decides whether to use it.)
         actions.append(Node(
             package='agos_sim',
             executable='odom_gps',
@@ -318,6 +425,13 @@ def generate_launch_description():
                               description='Where RTAB-Map keeps its map'),
         DeclareLaunchArgument('rtabmap_viz', default_value='false',
                               description="Also open RTAB-Map's own window (heavy)"),
+        DeclareLaunchArgument('slam', default_value='local',
+                              description='local = RTAB-Map runs here. remote = on another '
+                                          'computer (a Raspberry Pi with agos_pi_slam) at '
+                                          'slam_host. none = not started'),
+        DeclareLaunchArgument('slam_host', default_value='',
+                              description='slam:=remote: address of the Raspberry Pi '
+                                          '(or a Zenoh endpoint such as tcp/192.168.1.42:7447)'),
         DeclareLaunchArgument('log_level', default_value='info',
                               description='Log level of RTAB-Map and the Nav2 nodes'),
     ]

@@ -3,9 +3,17 @@
 # hands the result to Nav2, so only the values that differ are listed here.
 #
 # Why they differ: AGOS is a 0.711 x 0.381 m tracked robot in a 900 mm pipe.
-#   - In a pipe it cannot turn round (its tracks would climb the curved walls),
-#     so it must be able to drive backwards to a goal behind it, and the
-#     direction of the goal arrow is ignored. It can turn in the manholes.
+#   - In a pipe it cannot turn round (its tracks would climb the curved walls).
+#     It can turn in the manholes. Its camera looks ahead, so it drives into
+#     pipe it has not mapped yet forwards, and reverses only over pipe it has
+#     mapped (NAV_ALGORITHMS.md). So there are two of each:
+#       planner GridBased   Hybrid-A*, forwards only, through unknown space too
+#       planner Mapped      Smac 2D, through mapped space only
+#       controller FollowPath  MPPI, forwards only (the default)
+#       controller Reverse     MPPI, forwards or backwards, whichever is closer
+#     The explorer picks one of each for every goal (on the planner_selector
+#     and controller_selector topics); a goal from RViz uses GridBased and
+#     FollowPath. The direction of the goal arrow is ignored.
 #   - The pipe is only 0.9 m wide where the LiDAR sees it, so the stock 0.7 m
 #     obstacle padding (inflation) would fill the whole pipe.
 #   - Everything runs on one computer next to Gazebo, so the controller and
@@ -22,11 +30,53 @@ bt_navigator:
 
 planner_server:
   ros__parameters:
+    planner_plugins: ["GridBased", "Mapped", "GridBased2D"]
     GridBased:
-      # Smac 2D (A*) instead of NavFn. In a pipe, the middle of the map ahead
-      # stays unknown (LiDAR beams down the pipe hit nothing), and NavFn
-      # failed there with "Failed to create a plan from potential when a legal
-      # potential was found". Smac 2D plans through it.
+      # Hybrid-A* (Dolgov et al., "Path Planning for Autonomous Vehicles in
+      # Unknown Semi-structured Environments", IJRR 2010): it plans the
+      # heading as well as the position, so the path leaves the way the robot
+      # faces, and with Dubins curves it only plans forwards. In a pipe a goal
+      # behind the robot then has no path: the explorer first backs up to a
+      # manhole and turns there (frontiers.py, Snapshot.approach).
+      plugin: "nav2_smac_planner::SmacPlannerHybrid"
+      motion_model_for_search: "DUBIN"   # forwards only (REEDS_SHEPP: also backwards)
+      minimum_turning_radius: 0.2        # m; it can turn on the spot, so small
+      goal_heading_mode: "ALL_DIRECTION" # any heading at the goal
+      angle_quantization_bins: 72
+      tolerance: 0.25
+      # In a pipe the middle of the map ahead stays unknown (LiDAR beams down
+      # the pipe hit nothing): plan through it.
+      allow_unknown: true
+      max_planning_time: 2.0
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      cost_penalty: 2.0                  # keep to the middle of the pipe
+      non_straight_penalty: 1.2
+      change_penalty: 0.0
+      reverse_penalty: 2.0               # (REEDS_SHEPP only)
+      lookup_table_size: 20.0
+      cache_obstacle_heuristic: false    # the costmap rolls with the robot
+      downsample_costmap: false
+      smooth_path: true
+      debug_visualizations: false
+    Mapped:
+      # Smac 2D (A*) only through cells the map or the LiDAR has seen: the
+      # explorer uses it whenever the robot may reverse (back to a manhole to
+      # turn, back to the start at the end of a leg), so it reverses only over
+      # mapped pipe. (NavFn, the stock planner, failed in the pipes with
+      # "Failed to create a plan from potential when a legal potential was
+      # found".)
+      plugin: "nav2_smac_planner::SmacPlanner2D"
+      tolerance: 0.25
+      allow_unknown: false
+      max_planning_time: 2.0
+      use_final_approach_orientation: false
+    GridBased2D:
+      # The planner from before NAV_ALGORITHMS.md: Smac 2D through unknown
+      # space too, with no idea of heading. Used only with forward_only:=false,
+      # to compare against the old behaviour (it may reverse into new pipe).
       plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.25
       allow_unknown: true
@@ -41,9 +91,10 @@ controller_server:
       yaw_goal_tolerance: 3.15      # any heading: the robot may not be able to turn
     progress_checker:
       movement_time_allowance: 20.0  # stock 10 s; reversing out of a spur starts slowly
-    FollowPath:                      # MPPI
+    controller_plugins: ["FollowPath", "Reverse"]
+    FollowPath:                      # MPPI, forwards only
       vx_max: 0.3                    # a sensible pipe-inspection speed
-      vx_min: -0.3                   # reverse as fast as forwards
+      vx_min: 0.0                    # never backwards (Reverse below can)
       wz_max: 1.0
       # lighter: 1000 samples of 30 x 0.1 s (3 s ahead) instead of 2000 of
       # 56 x 0.05 s. model_dt must match the controller period (10 Hz).
@@ -51,14 +102,22 @@ controller_server:
       time_steps: 30
       model_dt: 0.1
       visualize: false               # don't publish the sampled trajectories
-      # Stock list minus GoalAngleCritic (turn to the goal arrow) and
-      # PreferForwardCritic (turn round rather than reverse).
+      # Stock list minus GoalAngleCritic (turn to the goal arrow)
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic",
+                "PathAlignCritic", "PathFollowCritic", "PathAngleCritic",
+                "PreferForwardCritic"]
+      PathAngleCritic:
+        mode: 2                      # drive the way the planner's path says (Hybrid-A*: forwards)
+      CostCritic:
+        consider_footprint: true     # check the real 0.71 m outline, not a circle
+    # Reverse: FollowPath with these changes (slam_nav.launch.py copies
+    # FollowPath and applies them), for goals the robot may reverse to
+    Reverse:
+      vx_min: -0.3                   # reverse as fast as forwards
       critics: ["ConstraintCritic", "CostCritic", "GoalCritic",
                 "PathAlignCritic", "PathFollowCritic", "PathAngleCritic"]
       PathAngleCritic:
         mode: 1                      # follow the path forwards OR backwards, whichever is closer
-      CostCritic:
-        consider_footprint: true     # check the real 0.71 m outline, not a circle
 
 local_costmap:
   local_costmap:
